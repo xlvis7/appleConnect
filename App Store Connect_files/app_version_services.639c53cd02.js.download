@@ -1,0 +1,92 @@
+define(['sbl!app'], function(itcApp) {
+
+    itcApp.factory('appVersionStatusService', function() {
+        var appPreOrderStatusKey = 'ITC.apps.status.readyForSale.apo';
+        var availableSubstatusesList = [appPreOrderStatusKey];
+
+        var service = {
+            getVersionStatusKey: function(app, state, referenceData) {
+                if (!referenceData || !state) return null;
+                else if (state === 'readyForSale' && service.isActiveApo(app)) return appPreOrderStatusKey;
+                else return referenceData.statusLevels[state].locKey;
+            },
+            isActiveApo: function(app) {
+                if (!app) return;
+                if (app.preOrderEndDate) {
+                    if (moment(app.preOrderEndDate).valueOf() > moment()) return true;
+                }
+                else if (!app.preOrderEndDate && app.isPreOrderLive) return app.isPreOrderLive;
+                else return false;
+            },
+            hasSubstatuses: function(apps){
+                var foundSubstatuses = false;
+                _.each(apps, function(app){
+                    // app.isPreOrderLive is currently the only "substatus"
+                    if (service.isActiveApo(app)) {
+                        _.each(app.versionSets, function(version){
+                            if (version.deliverableVersion && version.deliverableVersion.stateKey === 'readyForSale') foundSubstatuses = true;
+                        });
+                    }
+                });
+                return foundSubstatuses;
+            },
+            getSubstatusKey: function(){
+                return appPreOrderStatusKey;
+            },
+            getAvailableSubstatusesList: function() {
+                return availableSubstatusesList;
+            },
+            findAppsWithMatchingSubstatus: function(currentSearch) {
+                return _.filter(currentSearch, function(app){
+                    var statusTest = _.find(app.versionSets, function(version){
+                        if (version.deliverableVersion) return version.deliverableVersion.stateKey == 'readyForSale';
+                    });
+
+                    if (service.isActiveApo(app) && statusTest) return true;
+                });
+            },
+            isApoEnabled: function(pricingInfo) {
+                return pricingInfo.preOrder.clearedForPreOrder.value;
+            },
+            requiresApoAction: function(appOverviewData) {
+                return appOverviewData.requiresPreOrderRelease;
+            },
+            apoAppDate: function(intervals) {
+                return intervals.preOrder.appAvailableDate.value;
+            },
+            apoPreDate: function(intervals) {
+                return intervals.preOrder.preOrderAvailableDate;
+            }
+        };
+
+        return service;
+    });
+
+    itcApp.factory('appPricingPreOrderService', function($http) {
+        return {
+            releaseToPreOrder: function(adamId) {
+                var promise = $http.post(global_itc_path + '/ra/apps/' + adamId + '/releaseToPreOrder').then(function(response) {
+                    log("POST " + adamId + " to /releaseToPreOrder");
+                    log(response.data);
+                    return response.data;
+                }, function(reason) {
+                    return reason;
+                });
+
+                return promise;
+            },
+            releaseFromPreOrder: function(adamId) {
+                var promise = $http.post(global_itc_path + '/ra/apps/' + adamId + '/releaseFromPreOrder').then(function(response) {
+                    log("POST " + adamId + " to /releaseFromPreOrder");
+                    log(response.data);
+                    return response.data;
+                }, function(reason) {
+                    return reason;
+                });
+
+                return promise;
+            }
+        };
+    });
+
+});

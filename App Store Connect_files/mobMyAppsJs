@@ -1,0 +1,860 @@
+  'use strict';
+  define(['sbl!app'], function (itcApp) {
+
+    // Place this outside of the controller declaration so that it knows whether it has been set or not
+    var manageAppsControllerUniversal = function($scope, $rootScope, $filter, $http, loadManageAppsDataService, $location, betaStateResolver, univPurchaseService, $state, iapServices, ITC, appVersionStatusService , appArchiveService) {
+
+      $rootScope.isReady = false; // Must set this in every controller until we come up with a better solution 
+      $scope.apps = [];
+      $scope.currentApps = [];
+      
+      $scope.removedApps = [];
+      
+      $scope.pageSize = 60;
+      $scope.filteredData = {name: 'test'};
+      $scope.appsSortOrder = "lastModifiedDate";
+      $scope.reverse = true;
+      $scope.appsViewMode = "grid";
+      $scope.selectedType = 'All Types';
+      $scope.iosAppBundleString = "iOS App Bundle";
+      $scope.macAppBundleString = "Mac App Bundle";
+      $scope.appleTvOsString = "appletvos";
+      $scope.appleTvTemplateString = "appletvtemplate";
+      $scope.iosString = "ios";
+      $scope.osxString = "osx";
+      $scope.availableTypes = ['iOS', $scope.appleTvOsString, $scope.appleTvTemplateString, $scope.osxString, $scope.iosAppBundleString, $scope.macAppBundleString];
+      $scope.selectedStatus = 'all';
+      $scope.availableStatuses = ['readyForSale', 'prepareForUpload', 'waitingForUpload', 'uploadReceived', 'waitingForExportCompliance', 'waitingForReview', 'pendingContract', 'parking', 'processing', 'inReview', 'pendingDeveloperRelease', 'rejected', 'metadataRejected', 'removedFromSale', 'devRejected', 'developerRemovedFromSale', 'invalidBinary', 'missingScreenshot', 'deleted'];
+      $scope.errorString = "";
+      $scope.searchFocus = false;
+      $scope.modalcontent = {};
+      $scope.shouldShowAARPCol = false;
+      $scope.shouldShowiOSCol = false;
+      $scope.shouldShowMacOSCol = false;
+      $scope.shouldShowtvOSCol = false;
+      $scope.shouldShowtvTemplateCol = false;
+      $scope.multipleAppTypes = false;
+      $scope.shouldShowCustomerSupportLinks = false;
+      $scope.hasSubstatuses = false;
+      $scope.selectedSubstatus = true;
+
+      
+      $scope.removedAppCount = 0;
+      $scope.isViewingRemovedApps = function() { return $scope.selectedStatus === 'removed' };
+      $scope.aarpStatusFilterKey = 'ITC.apps.AppArchive.status.RemovedApps';
+      $scope.aarpStatusKey = 'ITC.apps.AppArchive.status.Removed';
+      $scope.aarpStatusSelect = function() { $scope.setSelectedStatus('removed'); };
+      
+      $scope.shouldShowAdditionalItems = false;
+
+      $scope.tempPageContent = {};
+      $scope.tempPageContent.sharedSecretModalLoading = true;
+      $scope.tempPageContent.showConfirmRegenerate = false;
+      $scope.tempPageContent.showMasterSharedSecretModal = false;
+
+
+      // Variables we'll be getting back from the JSON, set to false to be safe
+      $scope.canCreateAppBundles = false;
+      $scope.canCreateIOSApps = false;
+      $scope.canCreateMacApps = false;
+      $scope.cloudStorageEnabled = false;
+      $scope.macBundlesEnabled = false;
+      $scope.showSharedSecret = false;
+      $scope.contractAnnouncements = [];
+
+      $scope.$on('parentScopeLoaded',function(event,data){
+        if (!$scope.l10n) return;
+        $rootScope.currentPage = $scope.headerText = $scope.l10n.interpolate('ITC.HomePage.ManagePurpleSoftwareLinkText');
+        $scope.bundleText = $scope.l10n.interpolate('ITC.apps.manageyourapps.summary.bundle');
+
+        /*//check if user has seen modal yet...
+        $scope.checkLaunchIntroModal();*/
+
+      });
+
+      var userListener = $scope.$watch('user', function(newValue, oldValue) {
+        if (newValue !== undefined) {
+          $scope.init();
+          userListener();
+        }
+      });
+      $scope.getUrlInfo = function() {
+          $scope.showMasterSharedSecretModalOnLoad = $location.search()['showSharedSecret'] || null;
+          if ($scope.showMasterSharedSecretModalOnLoad) {
+              $scope.showMasterSharedSecretModal();
+              $location.search('showSharedSecret', null);
+          }
+      }
+
+      $scope.init = function() {
+        $rootScope.currentclass = "ManageApps"; //class to highlight the correct box...
+
+        $scope.loadAppData();
+
+        $scope.combinedIds = $scope.user.contentProviderId + $scope.user.userId;
+
+        
+        $scope.getUrlInfo();
+      //   window.scope = $scope; // For easy testing
+        $scope.shouldShowCustomerSupportLinks = ITC.roles.checkCustomerSupport($scope.user);
+      }
+
+      $scope.$watch("query", function(query){
+
+          $scope.query = query;
+
+          $scope.filteredData = $scope.applySearchQualifications();
+      });
+
+      
+      // async watching removed apps data
+      $scope.$watch("removedApps", function(query){
+          $scope.filteredData = $scope.applySearchQualifications();
+      });
+      
+
+      $scope.setIsReady = function() {
+        $rootScope.isReady = true;
+        $rootScope.wrapperclass = "nonfixedheader";
+      }
+
+      $scope.versionsTest = function(versionsArr, queryString) {
+        for (var i = 0; i < versionsArr.length; i++) {
+          if ($scope.l10n.interpolate($scope.referenceData.statusLevels[versionsArr[i].stateKey].locKey).toLowerCase().indexOf(queryString) != -1 ||
+             (versionsArr[i].version && versionsArr[i].version.indexOf(queryString) != -1)) {
+            return true;
+          }
+        }
+      }
+
+      $scope.platTest = function(versionsArr, queryString) {
+        for (var i = 0; i < versionsArr.length; i++) {
+          if (versionsArr[i].platformString.toLowerCase().indexOf(queryString) != -1) {
+            return true;
+          }
+        }
+      }
+
+      $scope.applySearchQualifications = function() {
+
+        
+        
+        if (!$scope.apps.length && !$scope.removedApps.length) return;
+        
+
+        $scope.currentApps = $scope.apps; // set current to apps data
+        
+        if ($scope.isViewingRemovedApps()) {
+          $scope.currentApps = $scope.removedApps; // switch current to removed apps data
+        }
+        $scope.multipleAppTypes = $scope.calcNumAppTypes(); // recalc
+        $scope.checkForPresenceOfPlatformTypes($scope.currentApps);
+        
+        if ($scope.query && $scope.query != '') {
+
+          // Begin testing to see if this is potentially an app store link to then parse out the adamId
+          if ($scope.query.length > 7) {
+            var re = /(\d{6,})/;
+            if ($scope.query.substring(0, 8) === 'https://') {
+              var adamId = re.exec($scope.query);
+              $scope.query = adamId[0];
+            }
+          }
+
+          // var filteredSearch = $filter('filter')($scope.apps, $scope.query);
+
+          var lowerCaseQuery = $scope.query.toLowerCase();
+          // Only search on certain fields (excluding meaningless ones like iconUrl & lastModified)
+          var filteredSearch = _.filter($scope.currentApps, function(app){
+            if (app.adamId.indexOf(lowerCaseQuery) != -1 ||
+               (app.appType && app.appType.toLowerCase().indexOf(lowerCaseQuery) != -1) ||
+               (app.bundleId && app.bundleId.toLowerCase().indexOf(lowerCaseQuery) != -1) ||
+               (app.name && app.name.toLowerCase().indexOf(lowerCaseQuery) != -1) ||
+               (app.vendorId && app.vendorId.toLowerCase().indexOf(lowerCaseQuery) != -1) ||
+               $scope.versionsTest(app.universalVersions, lowerCaseQuery) ||
+               $scope.platTest(app.universalVersions, lowerCaseQuery))
+            {
+              return true;
+            }
+            return false;
+          });
+        }
+        else filteredSearch = $scope.currentApps;
+
+        filteredSearch = $filter('orderBy')(filteredSearch, $scope.appsSortOrder, $scope.reverse);
+
+        if ($scope.selectedType != 'All Types') {
+          var tempSelectedType = $scope.selectedType;
+
+          if ($scope.selectedType !== $scope.iosAppBundleString && $scope.selectedType !== $scope.macAppBundleString) tempSelectedType = $scope.selectedType.toLowerCase();
+
+          filteredSearch = _.filter(filteredSearch, function(app){
+
+            if (app.type != $scope.iosString && (app.type == tempSelectedType)) return true;
+            else {
+              var match = _.find(app.universalVersions, function(version){
+                return version.platformString == tempSelectedType;
+              });
+
+              if (match) return true;
+            }
+          });
+        }
+
+        
+        if ($scope.isViewingRemovedApps()) {
+          // skip filtering by status if we're filtering by removed apps:
+          var filteredSearchSubset = filteredSearch.slice(0, $scope.pageSize);
+          $scope.fullSearchResults = filteredSearch;
+          return filteredSearchSubset;
+        }
+        
+
+        if ($scope.selectedStatus === 'ITC.apps.status.readyForSale.apo') $scope.selectedSubstatus = true;
+        else $scope.selectedSubstatus = false;
+
+        if ($scope.selectedStatus != 'all' && $scope.selectedStatus != '' && !$scope.selectedSubstatus) filteredSearch = _.filter(filteredSearch, function(app){
+          var statusTest = _.find(app.versionSets, function(version){
+            // if (app.type == $scope.iosString || app.type == 'mac') return version.stateKey == $scope.selectedStatus;
+            // Karen added to fix rdar://problem/15916297 but does not like this solution.
+            // When Patrick returns, he should re-evaluate this solution.
+            // The problem is that we're using the same status menu but bundles and regular apps
+            // have different status's returned from the db. Bundles get "prepareForSubmission"
+            // while apps get "prepareForUpload" for "Prepare for Submission."
+            if ($scope.selectedType === $scope.iosAppBundleString) {
+              if ($scope.selectedStatus === "prepareForUpload") {
+                $scope.selectedStatus = "prepareForSubmission";
+              }
+            }
+            else {
+              if ($scope.selectedStatus === "prepareForSubmission") {
+                $scope.selectedStatus = "prepareForUpload";
+              }
+            }
+
+            if ((version.deliverableVersion && version.deliverableVersion.stateKey == $scope.selectedStatus) ||
+                (version.inFlightVersion && version.inFlightVersion.stateKey == $scope.selectedStatus)) {
+              return true;
+            }
+
+
+
+            // return version.stateKey == $scope.selectedStatus;
+
+            // else return version.stateGroup == $scope.selectedStatus;
+          });
+          if (statusTest !== undefined) return true;
+          else return false;
+        });
+
+        // check for substatuses here
+        if ($scope.selectedSubstatus && $scope.selectedStatus == appVersionStatusService.getSubstatusKey()) {
+          filteredSearch = appVersionStatusService.findAppsWithMatchingSubstatus(filteredSearch);
+        }
+
+        var filteredSearchSubset = filteredSearch.slice(0, $scope.pageSize);
+
+        $scope.fullSearchResults = filteredSearch;
+
+        return filteredSearchSubset;
+      }
+
+      $scope.filterDeletedApps = function(apps) {
+        var filteredApps = _.reject(apps, function(app){
+          if (_.findWhere(app.universalVersions, {state: "deleted"})) return true;
+        });
+        return filteredApps;
+      }
+
+      $scope.modifyAppsData = function (apps) {
+
+        var sortArray = univPurchaseService.getSortList();
+
+        // Run through apps and flatten version data from new versionSets object to universalVersions object so we can more easily access version info in rest of code
+        _.each(apps, function(app){
+
+          app.universalVersions = [];
+          app.universalBuildVersions = [];
+
+          _.each(app.versionSets, function(versionSet, index) {
+
+            if (app.versionSets[index].inFlightVersion || app.versionSets[index].deliverableVersion) {
+              if (app.versionSets[index].inFlightVersion) var newLength = app.universalVersions.push(angular.copy(app.versionSets[index].inFlightVersion));
+              else var newLength = app.universalVersions.push(angular.copy(app.versionSets[index].deliverableVersion));
+
+              app.universalVersions[newLength-1].platformString = app.versionSets[index].platformString;
+              app.universalVersions[newLength-1].type = app.versionSets[index].type;
+              if (app.type !== 'iOS App Bundle' && app.type !== 'Mac App Bundle') app.type = versionSet.platformString;
+            }
+
+          });
+
+          if ($scope.platTest(app.versionSets, $scope.iosString) && $scope.platTest(app.versionSets, $scope.appleTvOsString)) app.type = $scope.iosString;
+
+          _.each(app.buildVersionSets, function(versionSet, index) {
+
+            if (app.buildVersionSets[index].inFlightVersion || app.buildVersionSets[index].deliverableVersion) {
+              if (app.buildVersionSets[index].inFlightVersion) var newLength = app.universalBuildVersions.push(angular.copy(app.buildVersionSets[index].inFlightVersion));
+              else var newLength = app.universalBuildVersions.push(angular.copy(app.buildVersionSets[index].deliverableVersion));
+
+              app.universalBuildVersions[newLength-1].platformString = app.buildVersionSets[index].platformString;
+              app.universalBuildVersions[newLength-1].type = app.buildVersionSets[index].type;
+            }
+          });
+
+          if (app.universalVersions) app.universalVersions = _.sortBy(app.universalVersions, function(app){
+            return sortArray.indexOf(app.platformString);
+          });
+
+          if (app.universalBuildVersions) app.universalBuildVersions = _.sortBy(app.universalBuildVersions, function(app){
+            return sortArray.indexOf(app.platformString);
+          });
+
+        });
+
+        return apps;
+      }
+
+      $scope.platformTypeCheck = function(apps, platformType) {
+        var result = _.find(apps, function(app){
+          return _.find(app.universalVersions, function(version){
+            return version.platformString == platformType;
+          });
+        });
+
+        if (result) return true;
+        else return false;
+      }
+
+      $scope.checkForPresenceOfPlatformTypes = function(apps) {
+        var aarpCheck = false;
+        
+        var aarpCheck = $scope.isViewingRemovedApps(); // hide other cols
+        
+        $scope.shouldShowAARPCol = aarpCheck;
+        $scope.shouldShowiOSCol = $scope.platformTypeCheck(apps, $scope.iosString);
+        $scope.shouldShowMacOSCol = $scope.platformTypeCheck(apps, $scope.osxString);
+        $scope.shouldShowtvOSCol = $scope.platformTypeCheck(apps, $scope.appleTvOsString);
+        $scope.shouldShowtvTemplateCol = $scope.platformTypeCheck(apps, $scope.appleTvTemplateString);
+      }
+
+      $scope.shouldEnableBundleCreation = function(){
+          return $scope.shouldShowiOSCol || $scope.shouldShowtvOSCol;
+      }
+
+      $scope.shouldEnableMacOsBundleCreation = function(){
+          return $scope.shouldShowMacOSCol;
+      }
+
+      $scope.getSelectedStatusKey = function() {
+          
+          if ($scope.isViewingRemovedApps()) {
+            return 'ITC.apps.AppArchive.status.RemovedApps';
+          }
+          
+          if (!$scope.referenceData) return;
+          if ($scope.selectedStatus == $scope.appVersionStatusService.getSubstatusKey()) return $scope.appVersionStatusService.getSubstatusKey();
+          else if ($scope.selectedStatus != 'all' && $scope.selectedStatus != $scope.appVersionStatusService.getSubstatusKey()) return $scope.referenceData.statusLevels[$scope.selectedStatus].locKey;
+          else return 'ITC.apps.manageyourapps.summary.allstatuses';
+      };
+
+      $scope.checkSubstatuses = function(apps) {
+          if (appVersionStatusService.hasSubstatuses(apps)) $scope.hasSubstatuses = true;
+      };
+
+      $scope.loadAppData = function() {
+        loadManageAppsDataService.summaryV2().then(function(response) {
+
+          var data = response.data.data;
+
+          $scope.apps = $scope.modifyAppsData(data.summaries);
+
+          $scope.checkForPresenceOfPlatformTypes($scope.apps);
+
+          $scope.apps = $scope.filterDeletedApps($scope.apps);
+          $scope.currentApps = $scope.apps;
+
+          
+          if (data.removedAppCount !== undefined && data.removedAppCount > 0 && $scope.hasEditPermittedActivity('AppArchive')) {
+            $scope.removedAppCount = data.removedAppCount;
+            $scope.shouldShowAdditionalItems = true; // should allow 'removed apps' filter option to show
+            // fetch removed apps
+            appArchiveService.getRemovedApps().then(function(removedAppsResponse) {
+              var removedData = removedAppsResponse.data.data;
+              $scope.removedApps = $scope.modifyAppsData(removedData);
+              $scope.setIsReady();
+            }, function(err) {
+              $scope.removedApps = [];
+              $scope.setIsReady();
+            });
+          }
+          
+
+          $scope.canCreateAppBundles = data.canCreateAppBundles;
+          $scope.canCreateIOSApps = data.canCreateIOSApps;
+          $scope.canCreateMacApps = data.canCreateMacApps;
+          $scope.contractAnnouncements = data.contractAnnouncements;
+          $scope.cloudStorageEnabled = data.cloudStorageEnabled;
+          $scope.iCloudDisplaySetPermitted = checkiCloudDisplaySetPermitted();
+          $scope.macBundlesEnabled = data.macBundlesEnabled;
+          $scope.showSharedSecret = data.showSharedSecret;
+          $scope.gameCenterGroupLink = data.gameCenterGroupLink;
+          $scope.cloudStorageLink = data.cloudStorageLink;
+          $scope.sharedSecretLink = data.sharedSecretLink;
+          $scope.catalogReportsLink = data.catalogReportsLink;
+
+          $scope.enabledPlatforms = data.enabledPlatforms;
+
+          // $scope.availableStatuses = $scope.getAvailableStatuses(data.summaries);
+
+          $scope.filteredData = $scope.apps;
+
+          $scope.checkSubstatuses(data.summaries);
+
+          $scope.filteredData = $scope.applySearchQualifications();
+
+          
+
+          $scope.multipleAppTypes = $scope.calcNumAppTypes();
+
+          
+          if ($scope.removedAppCount === 0) { // from summary payload
+            $scope.setIsReady(); // don't need to wait for removedApps to load
+          }
+          
+          
+        },
+        function(error){
+          console.error("Error getting data: ", error);
+
+          $scope.errorString = error.status + " " + error.statusText;
+
+          $scope.setIsReady();
+        });
+      };
+
+      var checkiCloudDisplaySetPermitted = function() {
+        if (!$scope.user.permittedActivities) return false;
+
+        var test = _.find($scope.user.permittedActivities.VIEW, function(permission) {
+          if (permission == "iCloudDisplaySet") return true;
+        });
+
+        if (test) return true;
+        else return false;
+      }
+
+      $scope.setView = function(viewMode) {
+        if (viewMode == "grid") $scope.appsViewMode = "grid";
+        else if (viewMode == "list") $scope.appsViewMode = "list";
+      };
+
+      $scope.toggleView = function() {
+        if ($scope.appsViewMode == "grid") {
+          $scope.appsViewMode = "list";
+          
+        }
+        else if ($scope.appsViewMode == "list") {
+          $scope.appsViewMode = "grid";
+          
+        }
+      };
+
+      $scope.setSelectedType = function(selectedType) {
+        if (!selectedType) return;
+        $scope.selectedType = selectedType;
+        
+
+        $scope.filteredData = $scope.applySearchQualifications();
+      }
+
+      $scope.typeDisplay = function(type) {
+        if (!$rootScope.isReady || $scope.l10n === undefined || type === undefined) return;
+
+        switch(type) {
+          case 'All Types':
+            return $scope.l10n.interpolate('ITC.apps.manageyourapps.summary.alltypes');
+            break;
+          case 'iOS':
+            return $scope.l10n.interpolate('ITC.apps.universal.myapps.iOS');
+            break;
+          case $scope.osxString:
+            return $scope.l10n.interpolate('ITC.apps.universal.myapps.macOS');
+            break;
+          case $scope.iosAppBundleString:
+            return $scope.l10n.interpolate('ITC.apps.universal.myapps.iOSBundle');
+            break;
+          case $scope.macAppBundleString:
+            return $scope.l10n.interpolate('ITC.mob.apps.universal.myapps.macOsBundle');
+            break;
+          case $scope.appleTvOsString:
+            return $scope.l10n.interpolate('ITC.apps.universal.myapps.tvOS');
+            break;
+          case $scope.appleTvTemplateString:
+            return $scope.l10n.interpolate('ITC.apps.universal.myapps.tvTemplate');
+            break;
+        }
+      }
+
+      $scope.closeMenu = function(event) {
+          var menuID = event.currentTarget.id;
+          $scope.$emit('closepopup', menuID);
+      }
+
+      $scope.setSelectedStatus = function(status) {
+        $scope.selectedStatus = status;
+        
+
+        $scope.filteredData = $scope.applySearchQualifications();
+      }
+
+      
+
+      $scope.changeOrder = function (appsSortOrder) {
+        $scope.appsSortOrder = appsSortOrder;
+        
+        $scope.filteredData = $filter('orderBy')($scope.fullSearchResults, appsSortOrder, $scope.reverse);
+      };
+
+      $scope.updateSorting = function (appsSortOrder) {
+        if ($scope.appsSortOrder != appsSortOrder) $scope.reverse = true;
+        $scope.reverse = !$scope.reverse;
+        $scope.appsSortOrder = appsSortOrder;
+        // $cookies['appsSortOrder' + $scope.combinedIds] = appsSortOrder;
+
+        $scope.changeOrder(appsSortOrder);
+      };
+
+      
+
+      $scope.countCalc = function(countType, string, all) {
+        var appsToCount = $scope.currentApps;
+        if (all) {
+          appsToCount = $scope.apps; // only non-removed ones
+        }
+        if (!countType) { return $scope.currentApps.length; } // get all count of all apps
+        var count = 0;
+        for (var i = 0; i < appsToCount.length; i++) {
+          if (countType === 'appType') {
+
+            if ((string === $scope.iosAppBundleString || string === $scope.macAppBundleString) && appsToCount[i].type === string) count++;
+            else {
+              _.each(appsToCount[i].universalVersions, function(version){
+                if (version.platformString && version.platformString.toLowerCase() == string.toLowerCase()) {
+                  count++;
+                }
+              });
+            }
+
+          }
+          else if (countType === 'status') {
+            if ($scope.hasSubstatuses && string == $scope.appVersionStatusService.getSubstatusKey()) {
+                return $scope.appVersionStatusService.findAppsWithMatchingSubstatus(appsToCount).length;
+            }
+            else {
+                for (var y = 0; y < appsToCount[i].universalVersions.length; y++) {
+                  if (appsToCount[i].universalVersions[y].stateKey.toLowerCase() == string.toLowerCase()) count++;
+                }
+            }
+          }
+        }
+
+        if (count === undefined) count = -1;
+
+        return count;
+      };
+
+      $scope.calcNumAppTypes = function() {
+        if (!$scope.currentApps.length) return false;
+
+         var typeArray = [];
+
+          for (var i = 0; i < $scope.currentApps.length; i++) {
+            if (!$scope.currentApps[i].universalVersions) return false;
+            for (var y = 0; y < $scope.currentApps[i].universalVersions.length; y++) {
+              if ($scope.currentApps[i].universalVersions[y].platformString) {
+                if ($scope.currentApps[i].universalVersions[y].platformString == $scope.iosString && $scope.currentApps[i].universalVersions[y].type == 'BUNDLE') typeArray.push('iosbundle');
+                else typeArray.push($scope.currentApps[i].universalVersions[y].platformString);
+              }
+            }
+          }
+
+          var uniqueArray = _.uniq(typeArray);
+          if (uniqueArray.length > 1) return true;
+      }
+
+      $scope.appBundleLink = function(adamId, type, version) {
+        if ($scope.isBundle(type)) {
+          // var baseUrl = global_itc_path + '/wa/LCAppBundlePage?adamId=';
+          // return baseUrl + adamId;
+
+          return global_itc_home_url + '/bundle/' + adamId;
+        } else {
+          var currentPath = $location.absUrl();
+          var newPath = currentPath + '/' + adamId;
+
+          if (version) {
+              newPath += '/' + version.platformString + '/';
+              if ($scope.shouldShowCustomerSupportLinks) {
+                  if (version.platformString === $scope.appleTvOsString && !$scope.hasProviderFeature('RATINGS_RESET')) newPath += 'ratings';
+                  else newPath += 'ratingsResponses';
+              }
+              else newPath += 'versioninfo';
+          }
+          else {
+              if ($scope.shouldShowCustomerSupportLinks) {
+                  if (type && type === $scope.appleTvOsString && !$scope.hasProviderFeature('RATINGS_RESET')) newPath += '/' + type + '/ratings';
+                  else newPath += '/' + type + '/ratingsResponses';
+              }
+          }
+
+          return newPath;
+        }
+      }
+
+      $scope.buildLink = function(adamId, type) {
+        return global_itc_home_url + '/app/' + adamId + '/testflight/builds/' + type;
+      }
+
+      $scope.getBuildStatusClass = function( status ) { return betaStateResolver.getIconClass( status ) }
+
+      $scope.resCenterLink = function(adamId, type, platform) { // now used in a ui-sref
+        var route;
+        if (!platform) platform = type;
+        if ($scope.isBundle(type)) {
+          route = "bundle_resolution_center({adamId: '" + adamId + "'})";
+        } else {
+          route = "app_overview.resolution_center({adamId: '" + adamId + "', platform: '" + platform + "' })";
+        }
+        return route;
+      }
+
+      $scope.isBundle = function(type) {
+        if (type == $scope.iosAppBundleString || type == $scope.macAppBundleString) return true;
+        else return false;
+      }
+
+      $scope.getNoResultsString = function() {
+        if (!$rootScope.isReady || $scope.l10n === undefined) return;
+        if (!$scope.query) return $scope.l10n.interpolate('ITC.apps.manageyourapps.summary.noresultsgeneric');
+        else return $scope.l10n.interpolate('ITC.apps.manageyourapps.summary.noresults', {'query': $scope.query});
+      }
+
+      $scope.getProperType = function(type) {
+        if (!$rootScope.isReady || $scope.l10n === undefined || type === undefined) return;
+
+        switch (type) {
+          case $scope.iosString:
+            return $scope.l10n.interpolate('ITC.apps.universal.myapps.iOS');
+            break;
+          case 'mac':
+          case $scope.osxString:
+            return $scope.l10n.interpolate('ITC.apps.universal.myapps.macOS');
+            break;
+          case $scope.iosAppBundleString:
+            return $scope.l10n.interpolate('ITC.apps.manageyourapps.summary.iosbundle');
+            break;
+          case $scope.macAppBundleString:
+            return $scope.l10n.interpolate('ITC.apps.manageyourapps.summary.macbundle');
+            break;
+          case $scope.appleTvOsString:
+            return $scope.l10n.interpolate('ITC.apps.universal.myapps.tvOS');
+            break;
+          case $scope.appleTvTemplateString:
+            return $scope.l10n.interpolate('ITC.apps.universal.myapps.tvTemplate');
+            break;
+          default:
+            return type;
+            break;
+        }
+        return false;
+      }
+
+      $scope.launchCreateNewApp = function(appType, params) {
+
+        if (((!$scope.canCreateIOSApps && appType == $scope.iosString) ||
+            (!$scope.canCreateMacApps && appType == $scope.osxString) ||
+            (!$scope.canCreateAppBundles && appType == 'bundle')) &&
+            $scope.contractAnnouncements.length > 0) {
+          $scope.showContractAnnouncementsModal = true;
+        }
+        else {
+          if (appType == 'bundle') $state.go('new_bundle', params);
+          else {
+            $scope.modalcontent.showCreateNewAppModal = true;
+            $scope.modalcontent.appType = appType;
+          }
+        }
+        $scope.$emit('closepopups',true);
+      }
+
+      $scope.appIcon = function(app) {
+
+        var iosPlatform = _.findWhere(app.versionSets, {'platformString':$scope.iosString});
+        var tvosPlatform = _.findWhere(app.versionSets, {'platformString':$scope.appleTvOsString});
+        var tvchannelPlatform = _.findWhere(app.versionSets, {'platformString':$scope.appleTvTemplateString});
+        var osxPlatform = _.findWhere(app.versionSets, {'platformString':$scope.osxString});
+
+        //look for devlierable version's icons in this order: iOS -> OSX -> tvOS -> tvChannel
+        var appIconUrl = null;
+
+        if (iosPlatform !== undefined && iosPlatform.deliverableVersion !== null && iosPlatform.deliverableVersion.largeAppIcon.thumbNailUrl !== null) {
+            appIconUrl = iosPlatform.deliverableVersion.largeAppIcon.thumbNailUrl;
+        } else if (osxPlatform !== undefined && osxPlatform.deliverableVersion !== null && osxPlatform.deliverableVersion.largeAppIcon.thumbNailUrl !== null) {
+            appIconUrl = osxPlatform.deliverableVersion.largeAppIcon.thumbNailUrl;
+        } else if (tvosPlatform !== undefined && tvosPlatform.deliverableVersion !== null && tvosPlatform.deliverableVersion.largeAppIcon.thumbNailUrl !== null) {
+            appIconUrl = tvosPlatform.deliverableVersion.largeAppIcon.thumbNailUrl;
+        } else if (tvchannelPlatform !== undefined && tvchannelPlatform.deliverableVersion !== null && tvchannelPlatform.deliverableVersion.largeAppIcon.thumbNailUrl !== null) {
+            appIconUrl = tvchannelPlatform.deliverableVersion.largeAppIcon.thumbNailUrl;
+        } else if (iosPlatform !== undefined && iosPlatform.inFlightVersion !== null && iosPlatform.inFlightVersion.largeAppIcon.thumbNailUrl !== null) {
+            appIconUrl = iosPlatform.inFlightVersion.largeAppIcon.thumbNailUrl;
+        } else if (osxPlatform !== undefined && osxPlatform.inFlightVersion !== null && osxPlatform.inFlightVersion.largeAppIcon.thumbNailUrl !== null) {
+            appIconUrl = osxPlatform.inFlightVersion.largeAppIcon.thumbNailUrl;
+        } else if (tvosPlatform !== undefined && tvosPlatform.inFlightVersion !== null && tvosPlatform.inFlightVersion.largeAppIcon.thumbNailUrl !== null) {
+            appIconUrl = tvosPlatform.inFlightVersion.largeAppIcon.thumbNailUrl;
+        } else if (tvchannelPlatform !== undefined && tvchannelPlatform.inFlightVersion !== null && tvchannelPlatform.inFlightVersion.largeAppIcon.thumbNailUrl !== null) {
+            appIconUrl = tvchannelPlatform.inFlightVersion.largeAppIcon.thumbNailUrl;
+        } else {
+            appIconUrl = app.iconUrl;
+        }
+
+        return appIconUrl;
+      }
+
+      $scope.isTvOsIcon = function(app) {
+        var iosPlatform = _.findWhere(app.versionSets, {'platformString':$scope.iosString});
+        var tvosPlatform = _.findWhere(app.versionSets, {'platformString':$scope.appleTvOsString});
+        var tvchannelPlatform = _.findWhere(app.versionSets, {'platformString':$scope.appleTvTemplateString});
+        var osxPlatform = _.findWhere(app.versionSets, {'platformString':$scope.osxString});
+
+        var appleTVStyle;
+        if (iosPlatform !== undefined && iosPlatform.deliverableVersion !== null && iosPlatform.deliverableVersion.largeAppIcon.thumbNailUrl !== null) {
+            appleTVStyle = false;
+        } else if (osxPlatform !== undefined && osxPlatform.deliverableVersion !== null && osxPlatform.deliverableVersion.largeAppIcon.thumbNailUrl !== null) {
+            appleTVStyle = false;
+        } else if (tvosPlatform !== undefined && tvosPlatform.deliverableVersion !== null && tvosPlatform.deliverableVersion.largeAppIcon.thumbNailUrl !== null) {
+            appleTVStyle = true;
+        } else if (tvchannelPlatform !== undefined && tvchannelPlatform.deliverableVersion !== null && tvchannelPlatform.deliverableVersion.largeAppIcon.thumbNailUrl !== null) {
+            appleTVStyle = true;
+        } else if (iosPlatform !== undefined && iosPlatform.inFlightVersion !== null && iosPlatform.inFlightVersion.largeAppIcon.thumbNailUrl !== null) {
+            appleTVStyle = false;
+        } else if (osxPlatform !== undefined && osxPlatform.inFlightVersion !== null && osxPlatform.inFlightVersion.largeAppIcon.thumbNailUrl !== null) {
+            appleTVStyle = false;
+        } else if (tvosPlatform !== undefined && tvosPlatform.inFlightVersion !== null && tvosPlatform.inFlightVersion.largeAppIcon.thumbNailUrl !== null) {
+            appleTVStyle = true;
+        } else if (tvchannelPlatform !== undefined && tvchannelPlatform.inFlightVersion !== null && tvchannelPlatform.inFlightVersion.largeAppIcon.thumbNailUrl !== null) {
+            appleTVStyle = true;
+        } else {
+            if (iosPlatform !== undefined || osxPlatform !== undefined) {
+                appleTVStyle = false;
+            } else {
+                appleTVStyle = true;
+            }
+        }
+
+        return appleTVStyle;
+      }
+
+      
+
+      $scope.getIconClass = function(app) {
+        if ($scope.isTvOsIcon(app)) return 'tv-os-icon';
+        
+        else if (app.type == $scope.iosString && $scope.appsViewMode == 'list') return 'ios7-style-icon';
+        else if (app.type == $scope.iosString && $scope.appsViewMode != 'list') return 'ios7-style-icon-large';
+        else if (app.type === $scope.osxString) return 'macos-icon';
+      }
+
+      $scope.loadMoreResults = function() {
+        if (!$scope.filteredData || !$scope.filteredData.length) return;
+
+        var low = $scope.filteredData.length;
+        var high = $scope.filteredData.length + $scope.pageSize;
+        var subsetToConcat = $scope.fullSearchResults.slice(low, high);
+
+        $scope.filteredData = $scope.filteredData.concat(subsetToConcat);
+      }
+
+      $scope.closeContractAnnouncementsModal = function() {
+        $scope.showContractAnnouncementsModal = false;
+      }
+
+      /** Shared Secret **/
+      $scope.showSharedSecretModal = function() {
+          $scope.$emit('closepopups',true);
+          $scope.sharedSecretCode = null;
+          $scope.tempPageContent.sharedSecretUpdating = false;
+          $scope.tempPageContent.showSharedSecretModal = true;
+          $scope.tempPageContent.sharedSecretModalLoading = true;
+          iapServices.getSharedSecret().then(function(data){
+              $scope.tempPageContent.sharedSecretModalLoading = false;
+              $scope.sharedSecretCode = data.data.sharedSecret;
+          });
+      }
+      $scope.showMasterSharedSecretModal = function() {
+          $scope.$emit('closepopups',true);
+          $scope.sharedSecretCode = null;
+          $scope.tempPageContent.sharedSecretUpdating = false;
+          $scope.tempPageContent.showMasterSharedSecretModal = true;
+          $scope.tempPageContent.sharedSecretModalLoading = true;
+          $scope.tempPageContent.showMasterSharedSecretModalmain = true;
+          iapServices.getSharedSecret().then(function(data){
+              $scope.tempPageContent.sharedSecretModalLoading = false;
+              $scope.sharedSecretCode = data.data.sharedSecret;
+              $scope.sharedSecretGeneratedDate = data.data.date;
+          });
+      }
+      $scope.formatDate = function(date) {
+          if (date === null) { // "no end date"
+              return $scope.l10n.interpolate('ITC.apps.sharedSecretModal.defaultDateText');
+          } else if (date === undefined) { // happens in first row before user has selected a tier.
+              return "";
+          }
+          return ITC.time.showAbbreviatedDate( date );
+      }
+      $scope.showConfirmRegenerateSharedSecret = function(shownow) {
+          $scope.$emit('closepopups',true);
+          if (shownow) {
+            $scope.tempPageContent.showConfirmRegenerate = true;
+            //$scope.tempPageContent.showMasterSharedSecretModal = false;
+            $scope.tempPageContent.showMasterSharedSecretModalmain = false;
+          } else {
+            //$scope.tempPageContent.showMasterSharedSecretModal = true;
+            $scope.tempPageContent.showMasterSharedSecretModalmain = true;
+            $scope.tempPageContent.showConfirmRegenerate = false;
+          }
+      }
+      $scope.generateSharedSecret = function(fromconfirm) {
+          $scope.tempPageContent.sharedSecretModalLoading = true;
+          if (fromconfirm !== undefined && fromconfirm) {
+            $scope.$emit('closepopups',true);
+            //$scope.tempPageContent.showMasterSharedSecretModal = true;
+            $scope.tempPageContent.showMasterSharedSecretModalmain = true;
+            $scope.tempPageContent.showConfirmRegenerate = false;
+          }
+          iapServices.generateSharedSecret().then(function(data){
+              $scope.sharedSecretCode = data.data.sharedSecret;
+              $scope.sharedSecretGeneratedDate = data.data.date;
+              $scope.tempPageContent.sharedSecretModalLoading = false;
+          });
+      }
+
+      // Show Add menu only when user has Edit permission for AppCreation or BundleCreation AND they are existing apps
+      $scope.shouldShowAddMenu = function() {
+        return $scope.hasEditPermittedActivity('AppCreation') ||
+          ($scope.hasEditPermittedActivity('BundleCreation') &&
+            (
+              ($scope.shouldEnableBundleCreation() && $scope.countCalc('appType', iosString, true) > 1) ||
+              ($scope.shouldEnableMacOsBundleCreation() && $scope.countCalc('appType', osxString, true) > 1)
+            )
+          )
+      }
+
+      $scope.appVersionStatusService = appVersionStatusService;
+
+    }
+
+    itcApp.register.controller('manageAppsControllerUniversal', ['$scope', '$rootScope', '$filter', '$http', 'loadManageAppsDataService', '$location', 'betaStateResolver', 'univPurchaseService', '$state', 'iapServices', 'ITC', 'appVersionStatusService', 'appArchiveService', manageAppsControllerUniversal]);
+
+
+  });

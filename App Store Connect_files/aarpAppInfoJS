@@ -1,0 +1,243 @@
+// /views/aarpAppInfoJS
+'use strict';
+define(['sbl!app'], function (itcApp) {
+    
+        var aarpAppInfoController = function($scope, $http, appArchiveService, appSiloingService, ITC, $q) {
+            // default states
+            $scope.showAppArchive = false;
+            $scope.showAppRestore = false;
+            $scope.hasUsers = false;
+            $scope.isAdminOrLegal = false;
+            $scope.errorState = false;
+
+            // toggle remove modal
+            $scope.showArchiveModal = false;
+            $scope.openArchiveModal = function() {
+                $scope.removingApp = false;
+                $scope.errorState = false;
+                $scope.showArchiveModal = true;
+            }
+
+            $scope.closeArchiveModal = function() {
+                if ($scope.removingApp) return;
+                $scope.showArchiveModal = false;
+                $scope.errorState = false;
+            }
+
+            $scope.removeApp = function() {
+                if ($scope.removingApp) return;
+                $scope.removingApp = true;
+                appArchiveService.patchApp($scope.adamId, {
+                    "data": {
+                        "type": "apps",
+                        "id": $scope.adamId,
+                        "attributes": {
+                            "removed": true
+                        }
+                    }
+                }).then(function(data) {
+                    // success:
+                    $scope.refreshState(function() {
+                        $scope.loadAppInfoDetails();
+                        $scope.setIsReady();
+                        $scope.removingApp = false;
+                        $scope.closeArchiveModal();
+                    });
+                }, function(err) {
+                    // validation error:
+                    var error = err.data && err.data.errors ? err.data.errors[0] : null;
+                    var reason = 'ITC.response.error.OPERATION_FAILED';
+                    var title = 'ITC.apps.AppArchive.modal.remove.header.error';
+                    if (error && error.code) {
+                        switch (error.code) {
+                            case 'ENTITY_ERROR.ATTRIBUTE.INVALID.INVALID_STATE':
+                                reason = 'ITC.apps.AppArchive.errors.remove.invalidStatus';
+                                break;
+                            case 'ENTITY_ERROR.ATTRIBUTE.INVALID.INVALID_STATE.EXISTING_GAME_CENTER_CONFIGURATION':
+                                title = 'ITC.apps.AppArchive.errors.remove.gameCenterGroup'; 
+                                reason = null;
+                                break;
+                            case 'ENTITY_ERROR.ATTRIBUTE.INVALID.INVALID_STATE.BELONGS_TO_APP_BUNDLE':
+                                reason = 'ITC.apps.AppArchive.errors.remove.appBundle';
+                                break;
+                            case 'ENTITY_ERROR.ATTRIBUTE.INVALID.INVALID_STATE.EXISTING_APP_TRANSFER':
+                                reason = 'ITC.apps.AppArchive.errors.remove.appTransfer';
+                                break;
+                            case 'ENTITY_ERROR.ATTRIBUTE.INVALID.INVALID_STATE.AVAILABLE_IN_APP_PURCHASES':
+                                reason = 'ITC.apps.AppArchive.errors.remove.iap';
+                                break;
+                            default:
+                        }
+                    }
+                    $scope.errorState = {
+                        title: title,
+                        reason: reason
+                    };
+                    $scope.removingApp = false;
+                });
+            }
+
+            // toggle restore modal
+            $scope.showRestoreModal = false;
+            $scope.openRestoreModal = function() {
+                $scope.resetLevelOfAccess();
+                $scope.errorState = false;
+                $scope.restoringApp = false;
+                $scope.showRestoreModal = true;
+            }
+            $scope.closeRestoreModal = function() {
+                if ($scope.restoringApp) return;
+                $scope.showRestoreModal = false;
+                $scope.errorState = false;
+                $scope.resetLevelOfAccess();
+            }
+
+            $scope.restoreApp = function() {
+                if ($scope.restoringApp || (!$scope.fullAccessSelected && !$scope.limitedAccessSelected)) return;
+                $scope.restoringApp = true;
+                appArchiveService.patchApp($scope.adamId, {
+                    "data" : {
+                        "type": "apps",
+                        "id": $scope.adamId,
+                        "attributes": {
+                            "removed": false
+                        }
+                    }
+                }).then(function(data) {
+                    var attributes = {
+                        "appAdamId": $scope.adamId
+                    };
+                    var userIds = _.map(_.where($scope.grantedUsersTemp.data, { group: 1 }), function(user) { return user.id; });
+                    if ($scope.fullAccessSelected) {
+                        attributes.userOperationType = 'ALL_SILOABLE_USERS';
+                        attributes.operationType = 'GRANT';
+                    } else {
+                        attributes.userIds = userIds;
+                        attributes.userOperationType = 'USERS_IN_PAYLOAD';
+                        attributes.operationType = 'GRANT';
+                    }
+                    if ($scope.limitedAccessSelected && userIds.length === 0) { // nobody to silo
+                        // success:
+                        $scope.refreshState(function() {
+                            $scope.loadAppInfoDetails();
+                            $scope.setIsReady();
+                            $scope.restoringApp = false;
+                            $scope.closeRestoreModal();
+                        });
+                    } else {
+                        appSiloingService.setUserAppPermissions({
+                            "data" : {
+                                "type": "userAppPermissions",
+                                "attributes": attributes
+                            }
+                        }).then(function(permissionsData) {
+                            // success:
+                            $scope.refreshState(function() {
+                                $scope.loadAppInfoDetails();
+                                $scope.setIsReady();
+                                $scope.restoringApp = false;
+                                $scope.closeRestoreModal();
+                            });
+                        }, function(err) {
+                            $scope.refreshState(function() {
+                                $scope.loadAppInfoDetails();
+                                $scope.setIsReady();
+                                $scope.errorState = {
+                                    title: 'ITC.apps.AppArchive.modal.restore.header.error.silo',
+                                    reason: 'ITC.apps.AppArchive.errors.restore.siloError'
+                                };
+                                $scope.restoringApp = false;
+                            });
+                        });
+                    }
+
+                }, function(err) {
+                    // validation error:
+                    var error = err.data && err.data.errors ? err.data.errors[0] : null;
+                    var reason = 'ITC.response.error.OPERATION_FAILED';
+                    var title = 'ITC.apps.AppArchive.modal.restore.header.error';
+                    if (error && error.code) {
+                        switch (error.code) {
+                            case 'ENTITY_ERROR.ATTRIBUTE.INVALID':
+                                reason = 'ITC.apps.AppArchive.errors.restore.appNameTaken';
+                                break;
+                            default:
+                        }
+                    }
+                    $scope.errorState = {
+                        title: title,
+                        reason: reason
+                    };
+                    $scope.restoringApp = false;
+                });
+            }
+
+            $scope.resetLevelOfAccess = function() {
+                $scope.levelOfAccess = { selection: null, isEditable: true };
+                $scope.limitedAccessSelected = false;
+                $scope.fullAccessSelected = false;
+                $scope.grantedUsersTemp = {data:[]};
+            }
+
+            $scope.updateLevelOfAccess = function(value) {
+                if (!$scope.levelOfAccess.isEditable) return;
+                $scope.levelOfAccess.selection = value;
+                $scope.limitedAccessSelected = (value === 'limitedAccess');
+                $scope.fullAccessSelected = (value === 'fullAccess');
+            }
+
+            $scope.$watch('levelOfAccess.siloableUserCount', function(val) {
+                if (val === undefined || val === null) return;
+                // keeping these conditionals separate for readability:
+                if (val === 0) { // if no siloable users
+                    $scope.updateLevelOfAccess('fullAccess'); // pre-select full access
+                } else if (val === 1 && $scope.user.publicUserId && $scope.userApiData.length > 0 && $scope.userApiData[0].id === $scope.user.publicUserId) {
+                    // if only siloable user is current actor
+                    $scope.updateLevelOfAccess('fullAccess'); // pre-select full access
+                }
+            });
+
+            $scope.$watch('showRestoreModal', function(val) {
+                if (val === true) {
+                    $scope.resetLevelOfAccess();
+                    $scope.hasUsers = false;
+                    // get users for user siloing component
+                    $q.all({
+                        userData: appSiloingService.getSiloableUsers(),
+                        inviteData: appSiloingService.getSiloablePendingUsers(),
+                        userCount: appSiloingService.getTotalUsers(),
+                        inviteCount: appSiloingService.getTotalInvitations()
+                    }).then(function(response){
+                        $scope.totalUserCount = (response.userCount + response.inviteCount);
+                        if ($scope.totalUserCount === 1) {
+                            $scope.updateLevelOfAccess('fullAccess');
+                            $scope.levelOfAccess.isEditable = false;
+                        }
+                        $scope.userApiData = response.userData.data.data.concat(response.inviteData.data.data); // pass api data to directive
+                        $scope.hasUsers = true;
+                    });
+                }
+            });
+
+            // watch overview data from app info controller
+            $scope.$watch('appOverviewData', function(val) {
+                if (val !== undefined && val!== null && $scope.AppOverviewLoaded === true) { // data (re)loaded?
+                    $scope.showDeleteApp = false;
+                    $scope.isAdminOrLegal = ITC.roles.isAdminOrLegal($scope.user);
+                    $scope.showAppArchive = ($scope.appOverviewData.archiveTimestamp !== undefined && $scope.appOverviewData.archiveTimestamp === null) ? true : false;
+                    $scope.showAppRestore = ($scope.appOverviewData.archiveTimestamp !== undefined && $scope.appOverviewData.archiveTimestamp !== null) ? true : false;
+                    $scope.tempPageContent.forceShowAdditionalInfo = true;
+                }
+            });
+
+            //watch for changes (may reset value after app info save) and reset to false
+            $scope.$watch('showDeleteApp',function(val){
+                if (val) {
+                    $scope.showDeleteApp = false;
+                }
+            });
+        }
+        itcApp.register.controller('aarpAppInfoController', ['$scope', '$http', 'appArchiveService', 'appSiloingService', 'ITC', '$q', aarpAppInfoController ]);
+    
+    
+});

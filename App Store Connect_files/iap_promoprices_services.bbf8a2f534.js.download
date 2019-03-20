@@ -1,0 +1,27 @@
+define(['sbl!app'], function (itcApp) {
+	itcApp.factory('iapPromoPricesServices',function($http){
+		var myService = {
+			validatePromoName: function(adamId,iapAdamId,namedata) {
+				return $http.post(global_itc_path + '/ra/apps/' + adamId + '/iaps/' + iapAdamId + '/pricing/promo-offers/validate',namedata).success(function(response) {
+					return response.data;
+				}).error(function(data, status) {
+					return status;
+				});
+			},
+			keyCheck: function() {
+				var req = {
+					method: 'GET',
+					url: json_api_path + '/v1/subscriptionKeys?fields=isActive&sort=-isActive',
+					headers: {
+						'Content-Type': 'application/vnd.api+json',
+						'Accept': 'application/vnd.api+json'
+					}
+				 };
+				return $http(req).then(function (response) {
+					return response.data;
+				}, function(error) { return error; });
+			},
+		};
+		return myService;
+	});
+});

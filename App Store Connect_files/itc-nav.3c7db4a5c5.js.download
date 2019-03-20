@@ -1,0 +1,345 @@
+define(['sbl!app', 'itc-header-angular'], function (itcApp) {
+    var HOME_ROUTE = 'home';
+    var APP_OVERVIEW_BASE_ROUTE = 'app_overview';
+    var USER_AND_ROLES_BASE_ROUTE =  'users_roles';
+    var MY_APPS_SECTION = 'ManageApps';
+    var MANAGE_USERS_SECTION = 'ManageUsers';
+
+    itcApp.directive('itcNav', function (itcHeaderService, $rootScope, $state, ITC, loadManageAppsDataService) {
+        return {
+            template: '<div id="header-container"><itc-header provider="isSoftwareProvider" components="itcHeaderComponents" ops="headerOps"></itc-header></div>',
+            restrict: 'E',
+            replace: true,
+            controller: function ($scope) {
+                function getHost(){
+                  var baseHost = 'https://appstoreconnect.apple.com';
+                  // get QA env if present
+                    if (location && location.hostname) {
+                      var startIndex = location.hostname.indexOf('itms');
+                      var endIndex = location.hostname.indexOf('-', startIndex);
+                      if (startIndex > -1 && endIndex > -1 && endIndex > startIndex) {
+                            var qaEnv = location.hostname.substring(startIndex + 4, endIndex);
+                            var env = parseInt(qaEnv, 10);
+                            if (!isNaN(env)) {
+                              baseHost = 'https://itms'+ env +'-appstoreconnect.apple.com';
+                            }
+                        }
+                    }
+                    return baseHost;
+                }
+
+
+
+                loadManageAppsDataService.summaryV2().then(function(response) {
+                  if (response && response.data && response.data.data && response.data.data.summaries && Array.isArray(response.data.data.summaries)){
+                    var sums = response.data.data.summaries;
+                    $scope.appSummeries = sums.reduce(function (acc, val) {
+                      if (val && val.adamId){
+                        acc[val.adamId] = val;
+                      }
+                      return acc;
+                    }, {});
+                  }
+                });
+
+
+                $scope.headerOps = {
+                  onMobileProviderSwitch: function (e) {
+                    if (e && e.target && e.target.id && $scope.itcHeaderCurrentProviders[e.target.id]) {
+                      $scope.userProfileControl.onSelection($scope.itcHeaderCurrentProviders[e.target.id]);
+                    }
+                  },
+                  mobileNavHandler: function (e) {
+                    if (window.itcAngHeader){
+                      window.itcAngHeader._toggleMobileMenu();
+                    }
+                  }
+                };
+                $scope.isSoftwareProvider = !!window.isSoftwareContent;
+                $scope.isUsersRolesRedirectEnabled = !!window.userRolesRedirectEnabled;
+                $scope.PAGE_NAV_CONTROL_ID = 'itc-page-nav-control'
+                $scope.HELP_CONTROL_ID = 'itc-help-control'
+                $scope.USER_PROFILE_CONTROL_ID = 'itc-user-profile-controls'
+                $scope.APP_SWITCHER_CONTROL_ID = 'itc-app-switcher-controls'
+
+                //handle first page load. this fallback should never kick in....but just in case.
+                $scope.itcHeaderCurrentPage = $state.current && $state.current.name ? $state.current.name : HOME_ROUTE;
+
+                $rootScope.$on('$stateChangeSuccess', function (ev, to) {
+                    $scope.itcHeaderCurrentPage = to.name;
+                    //for software providers - route to the new users and access page
+                    if ($scope.itcHeaderCurrentPage.indexOf(USER_AND_ROLES_BASE_ROUTE) > -1 && $scope.isSoftwareProvider && $scope.isUsersRolesRedirectEnabled) {
+                        var host = getHost();
+                        if (host){
+                          return window.location.assign(host + '/access/users');
+                        }
+                        // fallback to rel url
+                        return window.location.assign('/access/users');
+                    }
+
+                  $scope.getVisibleControls();
+                });
+
+
+              $rootScope.$watch('sessionData', function () {
+                 // var user = window.deep($rootScope.headerConfig, 'apis.user.response.data');
+                var user = $rootScope.sessionData
+                if (user) {
+                      $scope.configureUserProfileControl(user);
+                      $scope.getVisibleControls();
+                  }
+              })
+                $rootScope.$watch('headerConfig.apis.header.response.data.data', function () {
+                    var nav = window.deep($rootScope.headerConfig, 'apis.header.response.data.data');
+                    if (nav) {
+                        $scope.configurePageNav(nav);
+                        $scope.getVisibleControls();
+                    }
+                })
+
+                $rootScope.$watch('headerConfig.apis.help.response.data.data', function () {
+                    var help = window.deep($rootScope.headerConfig, 'apis.help.response.data.data');
+                    if (help) {
+                        $scope.itcHelpControl.menuItems = itcHeaderService.formatHelp(help);
+                        $scope.getVisibleControls();
+                    }
+                })
+
+                $rootScope.$watch('headerConfig.appSwitcherData.apps', function(){
+                    var apps =  window.deep($rootScope.headerConfig, 'appSwitcherData.apps')
+                    if (apps) {
+                        $scope.configureAppSwitcher(apps, $scope.user);
+                        $scope.getVisibleControls();
+                    }
+                })
+
+                $scope.itcPageNavControl = {
+                    id: $scope.PAGE_NAV_CONTROL_ID,
+                    type: 'icon',
+                    align: 'left',
+                    enableSearch: false,
+                    visible: false,
+                    selectedFormat: 'selectionWithoutIcon',
+                    onSelection: function () {
+                        //return false here so the page isn't selected to fast since there the user is prompted to "leave current page"
+                        //the page selection will happen when setting menu data
+                        return false;
+                    }
+                };
+
+                $scope.appSwitcherControl = {
+                    id: $scope.APP_SWITCHER_CONTROL_ID,
+                    visible: false,
+                    myAppsText: null,
+                    searchText: null,
+                  searchResults: function(state){
+                        return state.title + state.id + state.bundleId;
+                  },
+                    noResultsText: null,
+                    template: 'appSwitcher',
+                    myAppsOnSelect: function() {
+                        $scope.$apply(function () {
+                            $state.go('my_apps');
+                        });
+                    },
+                    onSelection: function (app, e) {
+                        // allow command clicks to open new tabs
+                        if (e && e.metaKey) {
+                            return false;
+                        }
+                        if (app && app.id) {
+                            e.preventDefault();
+                            $scope.$apply(function () {
+                                if (ITC.roles.hasUserRole($scope.user, 'Customer Support', true)) {
+									if (app.platforms.length === 1 && app.platforms[0].toLowerCase() === 'appletvos') $state.go('app_overview.ratings',{'adamId':app.id, 'platform':app.platforms[0].toLowerCase()});
+									else $state.go('app_overview.ratingsResponses',{'adamId':app.id, 'platform':app.platforms[0].toLowerCase()});
+								}
+			                    else $state.go('app_overview.store.appinfo', {'adamId': app.id});
+                            });
+                        }
+                        return true;
+                    },
+                };
+
+                $scope.userProfileControl = {
+                    id: $scope.USER_PROFILE_CONTROL_ID,
+                    visible: false,
+                    template: 'userProfile',
+                    userIsAuthenticated: false,
+                    fullName: null,
+                    userName: null,
+                    userId: null,
+                    dsId: null,
+                    signInText: null,
+                    signInUrl: '/login',
+                    signOutUrl: '/logout',
+                    signOutText: null,
+                    personalDetailsTitle: null,
+                    personalDetailsLinkUrl: null,
+                    onSelection: function (item) {
+                        if (item && item.id) {
+                            $scope.$apply(function () {
+                                $scope.setNewProvider(item.id);
+                            });
+                        }
+                        return true;
+                    },
+                    onAuthSelection: function () {
+                        $scope.$apply(function () {
+                            $scope.userProfileControl.userIsAuthenticated = !$scope.userProfileControl.userIsAuthenticated;
+                        });
+                        return true;
+                    },
+                }
+                $scope.itcHelpControl = {
+                    id:  $scope.HELP_CONTROL_ID,
+                    type: 'list',
+                    align: 'right',
+                    visible: false,
+                    selectFirstDropdownItem: true,
+                    firstMenuItemAsHeader: true,
+                    lastMenuItemAsFooter: true,
+                    disableSelectionDownArrow: true,
+                    selectedFormat: function () {
+                        return '<span class="tb-icon--help"></span>';
+                    },
+                    onSelection: function () {
+                        return true;
+                    }
+                };
+
+                $scope.itcHeaderComponents = [
+                    $scope.itcPageNavControl,
+                    $scope.appSwitcherControl,
+                    $scope.itcHelpControl,
+                    $scope.userProfileControl
+                ];
+
+
+                $scope.getSelectedPage = function(navItems) {
+                    var page = $scope.itcHeaderCurrentPage;
+                    var section = typeof page === 'string' && page.indexOf(USER_AND_ROLES_BASE_ROUTE) > -1 ? MANAGE_USERS_SECTION : MY_APPS_SECTION;
+                    var selectedPage;
+                    if (angular.isArray(navItems)) {
+                        selectedPage = navItems.filter(function(nav) {
+                            return nav.key === section;
+                        })
+                        if (selectedPage && selectedPage[0]) {
+                            return selectedPage[0];
+                        }
+                    }
+                }
+                $scope.configurePageNav = function (pageNav) {
+                    var menuItems, selectedPage;
+                    if (pageNav && pageNav.length > 0) {
+                        menuItems = itcHeaderService.formatMainNav(pageNav);
+                        selectedPage = $scope.getSelectedPage(menuItems);
+                        $scope.itcPageNavControl.menuItems = itcHeaderService.formatMainNav(pageNav);
+                        if (selectedPage) {
+                            $scope.itcPageNavControl.selectedItem = selectedPage;
+                        }else {
+                            $scope.itcPageNavControl.selectFirstDropdownItem = true;
+                        }
+                    }
+                };
+
+                $scope.configureAppSwitcher = function (apps, user) {
+                    var application = window.deep($rootScope.headerConfig, 'appSwitcherData.application'), control = $scope.appSwitcherControl;
+                    if (apps && angular.isArray(apps) && apps.length > 0 && application) {
+                        control.menuItems = itcHeaderService.formatApps(apps, user, $scope.appSummeries);
+                        control.selectedItem = itcHeaderService.formatSelectedApp(application);
+                        control.myAppsText = $scope.l10n.interpolate('ITC.HomePage.ManagePurpleSoftwareLinkText');
+                        control.searchText = $scope.l10n.interpolate('ITC.component.search.label');
+                        control.noResultsText = $scope.l10n.interpolate('ITC.NoResults');
+                    } else if (control && control.menuItems && control.selectedItem) {
+                        // if app is not found, but we have old data, clear old data
+                        delete control.menuItems;
+                        delete control.selectedItem;
+                    }
+                }
+
+                $scope.configureUserProfileControl = function (userData) {
+                    if (userData) {
+                        var contentProviderId = userData.provider.providerId;
+                        var dsId = userData.user.prsId;
+
+                        var userProfile =  $scope.userProfileControl;
+                        var providerId;
+
+                        if (contentProviderId) {
+                            providerId = parseInt(contentProviderId, 10)
+                            $scope.userProfileControl.selectedItem = {id: providerId, title: userData.provider.name};
+                        }
+                        var formattedUser = itcHeaderService.formatUser(userData);
+
+                        var user = userData.user;
+
+                        // add fallback values here if these vals are undefined for some reason
+                        userProfile.menuItems = formattedUser.availableProviders;
+                        userProfile.fullName =  user.fullName;
+                        userProfile.firstName = user.firstName;
+                        userProfile.lastName = user.lastName;
+                        userProfile.userName = user.emailAddress;
+                        userProfile.dsId = dsId;
+                        userProfile.signOutText = formattedUser.loc.signOut;
+                        userProfile.signInText = formattedUser.loc.signIn;
+
+                        userProfile.signInUrl =  formattedUser.loc.signInUrl;
+                        userProfile.signOutUrl =  formattedUser.loc.signOutUrl
+                        userProfile.personalDetailsLinkUrl = formattedUser.loc.personalDetailsLinkUrl
+                        userProfile.personalDetailsTitle =  formattedUser.loc.personalDetails || $scope.l10n.interpolate('ITC.HeaderFooter.PersonalDetailsLinkText');
+                        userProfile.userIsAuthenticated = true;
+
+                      /* Mobile Support */
+                      var sessionUser = $rootScope.sessionData;
+                      var availableProviders = formattedUser.availableProviders;
+                      var mobileNav = itcHeaderService.formatMobileNav(sessionUser);
+                      var userDetails = {
+                        personalDetailsLinkUrl: userProfile.personalDetailsLinkUrl,
+                        signInUrl: userProfile.signInUrl,
+                        signOutUrl: userProfile.signOutUrl,
+                      }
+                      var userInfo =  Object.assign({}, user, formattedUser.loc, userDetails);
+
+                      $scope.itcHeaderCurrentProviders = {};
+                      if (Array.isArray(availableProviders)) {
+                        formattedUser.availableProviders.forEach(function(provider) {
+                          $scope.itcHeaderCurrentProviders[provider.id] = provider;
+                        });
+
+                        if (availableProviders[0]){
+                          availableProviders[0].checked = true;
+                        }
+                      }
+                      if (window.itcAngHeader){
+                        window.itcAngHeader._setMobileMenuData(mobileNav, availableProviders, userInfo);
+                      }
+                    }
+                };
+
+
+                $scope.hasMenuItems = function(control) {
+                    return control.menuItems && control.menuItems.length > 0 ? true : false;
+                }
+
+                $scope.isAppOverviewPage = function (currPage) {
+                    if (typeof currPage === 'string' && currPage.indexOf(APP_OVERVIEW_BASE_ROUTE) > -1) {
+                        return true;
+                    }
+                    return false;
+                }
+                $scope.getVisibleControls = function(){
+                    var showPageNav = !!($scope.itcHeaderCurrentPage && $scope.itcHeaderCurrentPage !== HOME_ROUTE && $scope.hasMenuItems($scope.itcPageNavControl))
+                    var showUserProfile =  $scope.hasMenuItems($scope.userProfileControl);
+                    var showHelp = $scope.hasMenuItems($scope.itcHelpControl);
+                    var showAppSwitcher = !!($scope.isAppOverviewPage($scope.itcHeaderCurrentPage) && $scope.hasMenuItems($scope.appSwitcherControl));
+                    $scope.itcPageNavControl.visible = showPageNav;
+                    $scope.appSwitcherControl.visible = showAppSwitcher;
+                    $scope.userProfileControl.visible = showUserProfile ;
+                    $scope.itcHelpControl.visible = showHelp;
+                }
+            }//end controller
+        }; //end of return
+    });
+
+});

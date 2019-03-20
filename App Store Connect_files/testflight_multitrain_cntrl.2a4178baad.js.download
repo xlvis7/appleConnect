@@ -1,0 +1,41 @@
+define(['sbl!app'], function (itcApp) {
+    var testflightOverviewController = function($scope, $rootScope, $stateParams, tfInitService, tfLocalizationService, tfUserService) {
+        $scope.isLoaded = false;
+        $scope.isDown = false;
+        window.scope = $scope;
+        window.root = $rootScope;
+        $scope.$broadcast("TestFlightOverviewLoaded");
+        var locWatcher = $scope.$parent.$parent.$watch('l10n', function(l10n) {
+            // watch for l10n + interpolate func + keys to be ready:
+            if (!l10n || !l10n.interpolate || !l10n.keys || Object.keys(l10n.keys).length === 0) return;
+            if ($scope.isLoaded) {
+                tfLocalizationService.keys = l10n.keys; // keep keys up to date
+                return;
+            }
+            $scope.$parent.$parent.$watch('user', function(user) {
+                if (user === undefined) return;
+                if ($scope.hasProviderFeature('TF_DOWNTIME')) {
+                    $scope.isDown = true;
+                    if (!$scope.$$phase && !$scope.$root.$$phase) $scope.$apply();
+                    locWatcher();
+                    return;
+                }
+                $scope.$parent.$parent.$parent.$watch('referenceData', function (rData) {
+                    if (rData === undefined) return;
+                    tfInitService.setAppProvider($stateParams.adamId, user.contentProviderId);
+                    // permissions + flags
+                    tfUserService.permissions = user.permittedActivities;
+                    tfUserService.contentProviderFeatures = user.contentProviderFeatures;
+                    // Use l10n's interpolate function instead of own (for usage tracking)
+                    tfLocalizationService.keys = l10n.keys;
+                    tfLocalizationService.interpolate = l10n.interpolate;
+                    tfLocalizationService.detailLocales = $scope.$parent.referenceData.detailLocales;
+                    $scope.isLoaded = true;
+                    if (!$scope.$$phase && !$scope.$root.$$phase) $scope.$apply();
+                    // locWatcher();
+                });
+            });
+        }, true);
+    }
+    itcApp.register.controller('testflightOverviewController', [ '$scope', '$rootScope', '$stateParams', 'tfInitService', 'tfLocalizationService', 'tfUserService', testflightOverviewController ]);
+});

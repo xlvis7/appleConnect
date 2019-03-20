@@ -1,0 +1,151 @@
+// /views/siloAppInfoJS
+'use strict';
+define(['sbl!app'], function (itcApp) {
+    
+        var siloAppInfoController = function($scope, $http, appSiloingService, $q) {
+            // default states
+            $scope.hasUsers = false;
+            $scope.isAdminOrLegal = false;
+            $scope.showEditAccessLink = false;
+
+            // toggle restore modal
+            $scope.showEditAccessModal = false;
+            $scope.openEditAccessModal = function() {
+                $scope.resetLevelOfAccess();
+                $scope.submitting = false;
+                $scope.showError = false;
+                $scope.showEditAccessModal = true;
+            }
+            $scope.closeEditAccessModal = function() {
+                if ($scope.submitting) return;
+                $scope.showEditAccessModal = false;
+                $scope.resetLevelOfAccess();
+            }
+
+            $scope.editAccess = function() {
+                if ($scope.submitting || !$scope.levelOfAccess.edited) return;
+                $scope.submitting = true;
+                $scope.showError = false;
+                var attributes = {
+                    "appAdamId": $scope.adamId
+                };
+                attributes.operationType = 'REVOKE';
+                attributes.userOperationType = 'ALL_SILOABLE_USERS';
+                if ($scope.fullAccessSelected) {
+                    attributes.operationType = 'GRANT';
+                }
+                // revoke or grant all first:
+                appSiloingService.setUserAppPermissions({
+                    "data" : {
+                        "type": "userAppPermissions",
+                        "attributes": attributes
+                    }
+                }).then(function(data) {
+                    // then silo users if any:
+                    var userIds = _.map(_.where($scope.grantedUsersTemp.data, { group: 1 }), function(user) { return user.id; });
+                    if ($scope.limitedAccessSelected && userIds.length > 0) {
+                        attributes.userIds = userIds;
+                        attributes.userOperationType = 'USERS_IN_PAYLOAD';
+                        attributes.operationType = 'GRANT';
+                        appSiloingService.setUserAppPermissions({
+                            "data" : {
+                                "type": "userAppPermissions",
+                                "attributes": attributes
+                            }
+                        }).then(function(permissionsData) {
+                            // success:
+                            $scope.submitting = false;
+                            $scope.closeEditAccessModal();
+                        }, function(err) { // error siloing specific users
+                            $scope.submitting = false;
+                            $scope.errorText = 'ITC.apps.AppSiloing15.modal.error.granting.text';
+                            $scope.showError = true;
+                        });
+                    } else { // nobody to silo, so success:
+                        $scope.submitting = false;
+                        $scope.closeEditAccessModal();
+                    }
+                }, function(err) { // error granting or revoking all first
+                    $scope.submitting = false;
+                    $scope.errorText = 'ITC.apps.AppSiloing15.modal.error.general.text';
+                    $scope.showError = true;
+                });
+            }
+
+            $scope.resetLevelOfAccess = function() {
+                $scope.levelOfAccess = { selection: null, edited: false, originalSelection: null, isEditable: true };
+                $scope.limitedAccessSelected = false;
+                $scope.fullAccessSelected = false;
+                $scope.grantedUsersTemp = {data:[]};
+            }
+
+            $scope.updateLevelOfAccess = function(value) {
+                if (!$scope.levelOfAccess.isEditable) return;
+                $scope.levelOfAccess.selection = value;
+                $scope.limitedAccessSelected = (value === 'limitedAccess');
+                $scope.fullAccessSelected = (value === 'fullAccess');
+                if (value === 'fullAccess' && $scope.levelOfAccess.originalSelection) {
+                    if ($scope.levelOfAccess.originalSelection === 'limitedAccess') {
+                        $scope.levelOfAccess.edited = true;
+                    } else {
+                        $scope.levelOfAccess.edited = false;
+                    }
+                }
+            }
+
+            $scope.$watch('levelOfAccess.siloableUserCount', function(val) {
+                if (val === undefined || val === null) return;
+                // keeping these conditionals separate for readability:
+                if (val === 0) { // if no siloable users
+                    $scope.updateLevelOfAccess('fullAccess'); // pre-select full access
+                } else if (val === 1 && $scope.user.publicUserId && $scope.userApiData.length > 0 && $scope.userApiData[0].id === $scope.user.publicUserId) {
+                    // if only siloable user is current actor
+                    $scope.updateLevelOfAccess('fullAccess'); // pre-select full access
+                }
+            });
+
+            $scope.$watch('showEditAccessModal', function(val) {
+                if (val === true) {
+                    $scope.hasUsers = false;
+                    // get users for user siloing component
+                    $q.all({
+                        userData: appSiloingService.getSiloableUsers(),
+                        inviteData: appSiloingService.getSiloablePendingUsers(),
+                        existingUsers: appSiloingService.getSiloableUsers($scope.adamId),
+                        existingInvitationUsers: appSiloingService.getSiloablePendingUsers($scope.adamId),
+                        userCount: appSiloingService.getTotalUsers(),
+                        inviteCount: appSiloingService.getTotalInvitations()
+                    }).then(function(response){
+                        $scope.totalUserCount = (response.userCount + response.inviteCount);
+                        $scope.existingUserApiData = response.existingUsers.data.data.concat(response.existingInvitationUsers.data.data);
+                        $scope.userApiData = response.userData.data.data.concat(response.inviteData.data.data); // pass api data to directive
+                        if ($scope.totalUserCount === 1) {
+                            $scope.updateLevelOfAccess('fullAccess');
+                            $scope.levelOfAccess.isEditable = false;
+                        } else if ($scope.userApiData.length === $scope.existingUserApiData.length) {
+                            $scope.updateLevelOfAccess('fullAccess');
+                        } else {
+                            $scope.updateLevelOfAccess('limitedAccess');
+                        }
+                        $scope.levelOfAccess.originalSelection = $scope.levelOfAccess.selection;
+                        $scope.hasUsers = true;
+                    });
+                }
+            });
+
+            // watch overview data from app info controller
+            $scope.$watch('appOverviewData', function(val) {
+                if (val !== undefined && val!== null && $scope.AppOverviewLoaded === true) { // data (re)loaded?
+                    $scope.isAppEditable = ($scope.appOverviewData.archiveTimestamp === undefined || $scope.appOverviewData.archiveTimestamp === null);
+                    // determine if we show 'edit access' option:
+                    $scope.showEditAccessLink = $scope.isAppEditable && $scope.hasEditPermittedActivity('AppAccess');
+                    if ($scope.showEditAccessLink) {
+                        $scope.tempPageContent.forceShowAdditionalInfo = true;
+                    }
+                }
+            });
+        }
+        itcApp.register.controller('siloAppInfoController', ['$scope', '$http', 'appSiloingService', '$q', siloAppInfoController ]);
+    
+    
+});

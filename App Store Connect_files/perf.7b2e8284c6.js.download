@@ -1,0 +1,115 @@
+define(['perfkit'], function (perfUtils) {
+    var perf = angular.module('perf', []);
+    var APP_ID = 'com.apple.appstoreconnect.ng.jingle';
+    var DEFAULT_PAGE = 'default-page';
+    var delegate = perfUtils.delegate;
+    var perfKit = perfUtils.perfkit;
+
+if (perfKit) {
+  perfKit.init('xp_amp_itc_perf', null, delegate);
+
+  /**
+   * App config
+   */
+    perfKit.system.environment.setDelegate({
+      app: function(){
+          return APP_ID;
+      },
+      appVersion: function(){
+          return 'v1';
+      },
+      hostAppVersion: function () {
+        return window && window.location ? window.location.href : 'default';
+      }
+    });
+
+
+  /**
+   * Page Load Metrics - Capture navigation and paint timing on first load
+   */
+
+    if (window.performance && typeof window.performance.getEntriesByType === 'function') {
+        var nav = performance.getEntriesByType('navigation');
+        var resources = performance.getEntriesByType('resource');
+        var paint = performance.getEntriesByType('paint');
+        var navTimingMetrics = perfKit.eventHandlers.flexible.instance('W3CNavigation');
+
+        if (Array.isArray(nav) && nav[0] && typeof nav[0].toJSON === 'function') {
+          navTimingMetrics.addData(nav[0].toJSON());
+          navTimingMetrics.recordEvent();
+        }
+
+        paint.forEach(function (timingEntry) {
+          if (timingEntry && typeof timingEntry.toJSON === 'function') {
+              var paintTimingMetrics = perfKit.eventHandlers.flexible.instance('W3CPaint', timingEntry.toJSON());
+              paintTimingMetrics.recordEvent();
+            }
+        });
+
+        resources.forEach(function (timingEntry) {
+          if (timingEntry && typeof timingEntry.toJSON === 'function') {
+            var resourceMetrics = perfKit.eventHandlers.loadUrl.fromTimingEntry(timingEntry.toJSON());
+          resourceMetrics.recordEvent();
+            }
+        });
+    }
+
+  /**
+   * Page Render Metrics -  captures SPA page renders
+   */
+    perf.run(function($rootScope) {
+            var renderMetrics;
+            $rootScope.$on('$stateChangeStart', function (ev, to) {
+                var name = to && to.name ? to.name :  DEFAULT_PAGE;
+                renderMetrics = perfKit.eventHandlers.pageRender.instance(name, 'PRIMARY');
+                renderMetrics.markPageRequest();
+                renderMetrics.markPageAppear();
+            });
+
+            $rootScope.$on('$stateChangeSuccess', function () {
+                if (renderMetrics && typeof renderMetrics.markPageEnd === 'function') {
+                  renderMetrics.markPageUserInteractive();
+                  renderMetrics.markPageEnd();
+                  renderMetrics.recordEvent();
+                }
+            });
+    });
+
+  /**
+   * commented out code below records all xhrs. enable once this is confirmed with privacy
+   */
+  // perf.factory('perfInterceptor', function () {
+    //
+    //     return {
+    //         request: function(config) {
+    //             // config.loadUrlObject = perfkit.eventHandlers.loadUrl.instance({
+    //             //     app: APP_ID,
+    //             //     pageId: pageName,
+    //             //     pageType: pageName,
+    //             //     requestUrl: config.url,
+    //             //     type: 'script',
+    //             //     baseVersion: 1
+    //             //
+    //             // });
+    //             // config.loadUrlObject.markRequestStart();
+    //             return config;
+    //         },
+    //         response: function(response) {
+    //             // if (response && response.config && response.config.loadUrlObject) {
+    //             //     var loadUrlObject = response.config.loadUrlObject;
+    //             //     loadUrlObject.markResponseEnd();
+    //             //     loadUrlObject.addData({
+    //             //         correlationKey: response.headers()['x-apple-jingle-correlation-key'],
+    //             //         status: response.status
+    //             //     })
+    //             //     loadUrlObject.recordEvent();
+    //             // }
+    //             return response;
+    //         }
+    //     };
+    // });
+}//PERF KIT CHECK
+    // perf.config(['$httpProvider', function($httpProvider) {
+    //     $httpProvider.interceptors.push('perfInterceptor');
+    // }]);
+});

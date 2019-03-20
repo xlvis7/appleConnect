@@ -1,0 +1,599 @@
+'use strict';
+define(['sbl!app'], function (itcApp) {
+
+    var resCenterController = function ($scope, $rootScope, $state, $stateParams, $timeout, ITC, appSummaryService, bundleDataService, appVersionReferenceDataService, resCenterService, $upload, $sce) {
+
+        $scope.parentScopeLoaded = false;
+        $scope.tempPageContent = {};
+        $scope.tempPageContent.latestTimestamp = 0;
+
+        // This object is defined in ngRoutePartial.
+        /*var pageConfig = pageConfig || {
+            context:    'itcuser', // options: itcuser, extTester, extAppTester, intAppTester
+        };
+        $scope.context = pageConfig.context;*/
+        
+        /** PAGE LOAD **/
+        $scope.setisReady = function() {
+            if ($scope.parentScopeLoaded && $scope.pageDataReady && $scope.appVersionReferenceData && 
+                (($scope.appOrBundle === "app" && $scope.appSummary) || ($scope.appOrBundle === "bundle" && $scope.bundleName && $scope.bundleIconUrl)) ) {    
+                $rootScope.isReady = true;
+            } else {
+                $rootScope.isReady = false;
+            }
+        }
+        $scope.$parent.$watch('parentScopeLoaded',function(val) {
+            if (val) {
+                $rootScope.currentPage = $scope.l10n.interpolate('ITC.HomePage.ManagePurpleSoftwareLinkText');
+                $rootScope.currentclass = "ManageApps"; //global header class to highlight current section in main nav
+                $rootScope.wrapperclass = ""; //move into set subview function if this changes per subview...
+                $scope.parentScopeLoaded = true;
+                $scope.setisReady();
+            }
+        });
+
+        $scope.getFileType = function(filename) {
+            var i = filename.lastIndexOf(".");
+            var suffix = filename.substr(i+1);
+
+            return suffix;
+        }
+
+        $scope.loadPage = function() {
+            resCenterService.load($scope.appOrBundle, $scope.adamId, $scope.ver, $scope.platform).then(function(data){ 
+
+                $scope.setUpPageData(data.data);
+
+                //console.log("setting content height from load page");
+                $scope.setContentHeight();
+                //$scope.addListeners();
+            });
+        }
+
+        // Get app name, icon and other details
+        $scope.loadAppSummary = function() {
+            appSummaryService.async($scope.adamId).then(function(data) {
+                $scope.appSummary = data.data;  
+                $scope.setisReady();             
+            });
+        };
+
+        // Get bundle data. 
+        $scope.loadBundleData = function(bundleAdamId) {
+
+            bundleDataService.icon($scope.adamId).then(function(response) {
+              $scope.bundleIconUrl = response.data.data.largeIconUrl;
+              $scope.setisReady();   
+            });
+          
+            bundleDataService.detail($scope.adamId).then(function(response) {
+                $scope.bundleData = response.data.data;
+                var loc = $scope.bundleData.primaryLocaleCode;
+
+                var details = $scope.bundleData.details; // an array of objects
+                var detailForLoc = _.find(details, function(locDetail){ return locDetail.localeCode === loc; });
+                $scope.bundleName = detailForLoc.name;
+                $scope.setisReady();   
+            });    
+        }
+
+        $scope.loadAppVersionReferenceData = function() {
+            appVersionReferenceDataService.async().then(function(data) {
+                $scope.appVersionReferenceData = data.data;
+                $scope.setisReady();
+            });
+        }
+
+        // combine notes and message and sort.
+        $scope.combineAppNotesAndMessages = function() {           
+            if (!$scope.tempPageContent.combinedAppNotesAndMessages) {
+                $scope.tempPageContent.combinedAppNotesAndMessages = new Array();
+            }
+            else {
+                $scope.tempPageContent.combinedAppNotesAndMessages.length = 0;
+            }
+
+            _.each($scope.pageData.appMessages.threads, function(appMessage) {
+                var appMessageCopy = angular.copy(appMessage);
+                appMessageCopy.dataType = "appMessages";
+                var latestDate; 
+                _.each(appMessage.messages, function(msg) {
+                    if (!latestDate || msg.date > latestDate) {
+                        latestDate = msg.date;
+                    }
+                });
+                appMessageCopy.latestDate = latestDate;
+                $scope.tempPageContent.combinedAppNotesAndMessages.push(appMessageCopy);
+            });
+            _.each($scope.pageData.appNotes.threads, function(appNote) {
+                var appNoteCopy = angular.copy(appNote);
+                appNoteCopy.dataType = "appNotes";
+                var latestDate; 
+                _.each(appNote.messages, function(msg) {
+                    if (!latestDate || msg.date > latestDate) {
+                        latestDate = msg.date;
+                    }
+                });
+                appNoteCopy.latestDate = latestDate;
+                $scope.tempPageContent.combinedAppNotesAndMessages.push(appNoteCopy);
+            });
+            $scope.tempPageContent.combinedAppNotesAndMessages = _.sortBy($scope.tempPageContent.combinedAppNotesAndMessages, 'latestDate');
+            $scope.tempPageContent.combinedAppNotesAndMessages.reverse();
+            //console.log("$scope.tempPageContent.combinedAppNotesAndMessages: ", $scope.tempPageContent.combinedAppNotesAndMessages);
+
+            $timeout( function() {
+                $scope.$apply();
+            });
+        }
+
+        $scope.setUpPageData = function(data) {
+            $scope.pageData = data;
+            //$scope.initSelectedThread(); // no longer used
+
+            $scope.combineAppNotesAndMessages();
+
+            var doc = $(document);
+            var wrapper = doc.find('#pageWrapper');
+            $scope.wasAllowingGlobalFooter = wrapper.hasClass("allow-global-footer");
+
+            // uncomment to test messages without bodies.
+            //$scope.pageData.appNotes.threads[0].messages[0].body = null;
+            
+            $scope.pageDataReady = true;
+            $scope.fileUploadsInProgress = 0;
+
+            $scope.tempPageContent.maxCharsExceeded = $scope.l10n.interpolate('ITC.apps.resolutionCenter.message.tooLong');
+
+            $scope.setisReady();
+
+            $timeout( function() {
+                var resCenterHelp = $(document).find("#resCenterReplyHelpID");
+                resCenterHelp.on("click", $scope.replyHelpClicked);
+                resCenterHelp.on("mouseenter", $scope.replyHelpMouseEntered);
+                resCenterHelp.on("mouseleave", $scope.replyHelpMouseLeft);
+            });
+        }
+
+        $scope.replyHelpClicked = function() {
+            $scope.tempPageContent.showReplyHelp = true; // pop up modal.
+            $scope.$apply();
+        }
+
+        // because it's not a regular link 
+        $scope.replyHelpMouseEntered = function (e) {
+            this.style.cursor = "pointer";
+        }
+        $scope.replyHelpMouseLeft = function (e) {
+            this.style.cursor = "auto";
+        }
+
+        $scope.initResponse = function() {
+            var msgData = {};
+            msgData.appNotes = {};
+            msgData.betaNotes = {};
+            msgData.appMessages = {};
+
+            msgData.appNotes.threads = new Array();
+            msgData.betaNotes.threads = new Array();
+            msgData.appMessages.threads = new Array();
+
+            return msgData;
+        }
+
+        /* not currently used.
+        $scope.downloadLink = function(url) {
+            //var content = 'file content';
+            var blob = new Blob([ url ], { type : 'image/png' });
+            $scope.url = $sce.trustAsResourceUrl(URL.createObjectURL( blob ));
+
+            return $scope.url;
+        }*/
+
+        // converts newlines to <br>'s'
+        $scope.renderHtmlWithNewlines = function(html_code) {
+            if (html_code) {
+                var re = new RegExp('\n', 'g');
+                var fixed_html = html_code.replace(re,'<br>');
+                return $sce.trustAsHtml(fixed_html);
+            }
+            else {
+                return null;
+            }
+        };
+
+        $scope.submit = function() {
+            $scope.sendInProgress = true;
+
+            var msgData = $scope.initResponse();
+            var thread = angular.copy($scope.tempPageContent.selectedThread);
+            thread.messages.length = 0;
+            var message = {};
+            message.from = $scope.user.displayName;
+            message.date = new Date().getTime();
+            message.body = $(document).find("#responseTextArea textarea")[0].value;
+            message.tokens = new Array();
+
+            if ($scope.selectedFiles) {
+                var file;
+                for (var i=0; i<$scope.selectedFiles.length; i++) {
+                    file = $scope.selectedFiles[i];
+                    message.tokens[i] = {};
+                    message.tokens[i].name = file.name;
+                    message.tokens[i].timestamp = message.date;
+                    message.tokens[i].assetToken = file.token;
+                    message.tokens[i].fileType = file.type;
+                    // url will be filled in on GET.
+                }
+            }
+            
+            thread.messages.push(message);
+            
+            // delete temporary additions intended just for sorting.
+            delete thread.dataType;
+            delete thread.latestDate;
+
+            msgData[$scope.tempPageContent.selectedThreadType].threads.push(thread);
+            
+            console.info("about to send msg data: ", msgData);
+
+            var threadID = thread.id;
+
+            resCenterService.send($scope.appOrBundle, $scope.adamId, $scope.ver, $scope.platform, msgData).then(function(data){
+       
+                $scope.fileUploadError = false;
+                $scope.sendInProgress = false;
+
+                if (data.status == "500") {
+                    //$scope.sendInProgress = false;
+                    $scope.tempPageContent.resCenterSendError = new Array();  
+                    $scope.tempPageContent.resCenterSendError.push($scope.l10n.interpolate('ITC.messages.errors.genericProblemSaving'));
+                } else if (data.data.sectionErrorKeys.length > 0) { // there was an error
+                    //$scope.sendInProgress = false;
+                    $scope.tempPageContent.resCenterSendError = _.map(data.data.sectionErrorKeys, function(key) {
+                                                                        return $scope.l10n.interpolate(key);
+                                                                    });
+                } else { // it worked!
+                    $scope.tempPageContent.resCenterSendError = false;
+                    //$scope.sendInProgress = false;
+
+                    // reset page data
+                    $scope.pageData = data.data; 
+                    $scope.combineAppNotesAndMessages();
+
+                    // clear selectedFiles
+                    if ($scope.selectedFiles) {
+                        $scope.selectedFiles.length = 0;
+                    }
+
+                    // reset the selected thread
+                    var thread = $scope.getThreadByID($scope.tempPageContent.selectedThreadType, threadID);
+                    $scope.tempPageContent.selectedThread = thread;
+
+                    // scroll to the newly sent message
+                    var scrollpane = $(".messageDetailList");
+                    // scrolls to bottom
+                    //scrollpane.animate({ scrollTop: scrollpane[0].scrollHeight }, "slow");
+                    // scrolls to top
+                    scrollpane.animate({ scrollTop: 0 }, "slow");
+                }
+            });
+
+        }
+
+        $scope.getThreadByID = function(type, id) {
+            var threadArr = $scope.pageData[type].threads;
+            var thread = _.filter(threadArr, function(thread) {
+                return thread.id === id;
+            });
+
+            return thread[0];
+        }
+
+        $scope.getMessageDate = function (message) {
+            var dateAndTime = ITC.time.showDateAtTime(message.date);
+            return dateAndTime;
+        }
+
+        $scope.responseSectionShouldShow = function() {
+            if ($scope.tempPageContent && $scope.tempPageContent.selectedThread) {
+
+                var shouldShow = $scope.tempPageContent.selectedThread.active && $scope.tempPageContent.selectedThread.canDeveloperAddNote && $scope.hasEditPermittedActivity('AppResolutionCenter') && !$scope.hasContentProviderFeature('WINTER_SHUTDOWN');
+
+                if (shouldShow) {
+                    $scope.setMsgDetailListHeight();
+                }
+
+                return shouldShow;
+            }
+            else {
+                return false;
+            }
+        }
+
+        $scope.setMsgDetailListHeight = function() {
+            var doc = $(document);
+            var wrapper = doc.find('#pageWrapper');
+            var msgDetail = wrapper.find('.messageDetail');
+            var msgResponse = msgDetail.find('.messageResponse');
+            var msgDetailList = msgDetail.find('.messageDetailList');
+        
+            var msgResponseHeight = msgResponse.height();
+            var padding = parseInt(msgDetailList.css("padding-top"));
+            var msgDetailHeight = msgDetail.height();
+            msgDetailList.height(msgDetailHeight - msgResponseHeight - (3*padding)); // don't ask why 3 
+        }
+
+        // Selects the top thread
+        // No longer used. Keeping around just in case the rules change and we want the top thread initially selected.
+        $scope.initSelectedThread = function() {
+            if ($scope.pageData.appMessages.threads.length > 0) {
+                $scope.tempPageContent.selectedThread = $scope.pageData.appMessages.threads[0];
+                $scope.tempPageContent.selectedThreadType = "appMessages";
+            } 
+            else if ($scope.pageData.appNotes.threads.length > 0) {
+                $scope.tempPageContent.selectedThread = $scope.pageData.appNotes.threads[0];
+                $scope.tempPageContent.selectedThreadType = "appNotes";
+            }
+            else if ($scope.pageData.betaNotes.threads.length > 0) {
+                $scope.tempPageContent.selectedThread = $scope.pageData.betaNotes.threads[0];
+                $scope.tempPageContent.selectedThreadType = "betaNotes";
+            }
+        }
+
+        // when selected thread changes, clear text area
+        $scope.$watch('tempPageContent.selectedThread',function(val) {
+            if (val) {
+                $scope.tempPageContent.responseValue = "";
+                // clear selectedFiles
+                if ($scope.selectedFiles) {
+                    $scope.selectedFiles.length = 0;
+                }
+
+                // sort the messages
+                $scope.tempPageContent.selectedThread.messages = _.sortBy($scope.tempPageContent.selectedThread.messages,function(message) {
+                                                    return -message.date;
+                                                });
+
+                //console.log("setting content height from selectedThread watch");
+
+                $scope.setContentHeight();
+                
+            }
+        });
+
+        $scope.$watch('tempPageContent.responseValue',function(val) {
+            // clear server error if user changes the value in the text field
+            $scope.tempPageContent.resCenterSendError = false;
+        });
+
+        $scope.onFileSelect = function($files) {       
+            var file;
+            $scope.fileUploadError = false;
+            $scope.fileUploadsInProgress = 0;
+            if (!$scope.selectedFiles) {
+                $scope.selectedFiles = new Array();
+            }
+
+            for (var i = 0; i < $files.length; i++) {
+
+                file = $files[i];
+                $scope.uploadFile(file);
+                //$scope.selectedFiles.push(file);       
+            }
+        }
+
+        $scope.deleteFile = function (index) {
+            $scope.selectedFiles.splice(index, 1); 
+            $scope.fileUploadError = false;
+        }
+
+        $scope.uploadsInProgress = function() {
+            return $scope.fileUploadsInProgress > 0;
+        }
+
+        $scope.uploadFile = function(file) { 
+            
+            $scope.fileUploadsInProgress++;
+            
+            var fileType = file.type;
+            if (!fileType || fileType.length===0) { // happens with log files for some reason
+                fileType = "text/plain"; 
+            }
+
+            var headersForUpload = {'Content-Type': fileType,
+                          'X-Apple-Upload-Referrer': window.location.href,
+                          'X-Apple-Upload-AppleId': $scope.adamId,
+                          'X-Apple-Upload-itctoken': $scope.appVersionReferenceData.ssoTokenForImage,
+                          'X-Apple-Upload-ContentProviderId': $scope.user.contentProviderId,
+                          'X-Original-Filename': file.name
+                         };
+                        
+            if ($scope.appOrBundle === "app") {
+                headersForUpload['X-Apple-Request-UUID'] = _.guid();
+            }
+
+            $scope.upload = $upload.upload({
+                url: $scope.referenceData.directUploaderUrls.resCenterFileUrl, 
+                method: 'POST',
+                headers: headersForUpload,
+                file: file
+            }).progress(function(evt) {
+                //console.log('percent: ' + parseInt(100.0 * evt.loaded / evt.total));
+                //$scope.progress = parseInt(100.0 * evt.loaded / evt.total);
+            }).success(function(data, status, headers, config) {
+                    //console.info("res center file upload success: ", data);
+                    $scope.fileUploadsInProgress--;
+
+                    file.token = data.token;
+                    $scope.selectedFiles.push(file); 
+            }).error(function(data, status, headers, config) {
+                console.info("ERROR uploading res center file to DU: ", data);
+                
+                var error;
+                if (data) {
+                    var locErrorKey = "ITC.apps.validation.res_center."+ data.suggestionCode.toLowerCase(); 
+                    error = $scope.renderHtml($scope.l10n.interpolate(locErrorKey));
+                } else {
+                    error = $scope.l10n.interpolate('ITC.AppVersion.DUGeneralErrors.FileNotLoaded');
+                }
+
+                if (!$scope.fileUploadError) { // only show the first error
+                    $scope.fileUploadError = error;
+                }
+
+                // make error disappear after 8 seconds.
+                $timeout(function(){
+                    $scope.fileUploadError = false;
+                }, 8000);
+
+                $scope.fileUploadsInProgress--;
+                
+            });
+        };
+
+
+        /* ******** INIT ******** */
+        if ($stateParams.adamId) {
+            //console.log("ADAM ID: " + $stateParams.adamId);
+            $scope.adamId = $stateParams.adamId;
+            $scope.ver = $stateParams.ver;
+            $scope.simpleHeader = $stateParams.simpleHeader;
+            $scope.platform = $stateParams.platform;
+            $scope.appOrBundle = $stateParams.appOrBundle;
+            $scope.loadPage();
+            if ($scope.appOrBundle === "app") {
+                $scope.loadAppSummary();
+            }
+            else if ($scope.appOrBundle === "bundle") {
+                $scope.loadBundleData();
+            }
+            $scope.loadAppVersionReferenceData();
+        }
+
+        $scope.fixFooter = function() {
+            var doc = $(document);
+            var wrapper = doc.find('#pageWrapper');
+            var windowH = $(window).height();
+            var footerH = doc.find('#footer').outerHeight(true);
+
+            wrapper.addClass("allow-global-footer");
+
+            wrapper.height(windowH-footerH);
+        }
+
+        $scope.undoFooterFix = function() {
+            var doc = $(document);
+            var wrapper = doc.find('#pageWrapper');
+
+            wrapper.css("height", "");
+
+            if (!$scope.wasAllowingGlobalFooter) { // if there was no global footer, undo the global footer.
+                wrapper.removeClass("allow-global-footer");
+            }
+        }
+
+        // The error message has an opacity transition on it. Need to wait for that to finish to set the content
+        // height.
+        $(document).find('.pagemessage.error').on('transitionend webkitTransitionEnd oTransitionEnd otransitionend MSTransitionEnd', function( event ) { 
+            if (event.originalEvent.propertyName === "opacity" ) {
+                $scope.setContentHeight();
+            }
+        });
+
+        $scope.setContentHeight = function() {
+            var doc = $(document);
+            var wrapper = doc.find('#pageWrapper');
+
+            $scope.fixFooter();
+
+            var windowH = $(window).height();
+            var wrapperH = wrapper.outerHeight(true);
+            var footerH = doc.find('#footer').outerHeight(true);
+            var headerH = wrapper.find('#header').outerHeight(true);
+
+            var appHeaderH;
+            if (wrapper.find('#headcontent').hasClass("ng-hide")) {
+                appHeaderH = wrapper.find('#simpleHeadContent').outerHeight(true);
+                appHeaderH += wrapper.find('#appPageHeader').outerHeight(true);
+
+                var errorMsg = wrapper.find('.pagemessage.error');
+                var infoMsg = wrapper.find('.pagemessage.info');
+                var holidayMsg = wrapper.find('#holiday_header');
+                
+                // loop through error message(s)
+                _.each(errorMsg, function(eMsg) {
+                    var jErrorMsg = $(eMsg);
+                    var isHiding = jErrorMsg.hasClass("ng-hide");
+                    if (!isHiding) {
+                        appHeaderH += jErrorMsg.outerHeight(true);
+                    }
+                });
+                // loop through info message(s)
+                _.each(infoMsg, function(iMsg) {
+                    var jInfoMsg = $(iMsg);
+                    var isHiding = jInfoMsg.hasClass("ng-hide");
+                    if (!isHiding) {
+                        appHeaderH += jInfoMsg.outerHeight(true);
+                    }
+                });
+                if (holidayMsg.hasClass("show")) {
+                    appHeaderH += holidayMsg.outerHeight(true);
+                }
+            }
+            else {
+                appHeaderH = wrapper.find('#headcontent').outerHeight(true);
+            }
+
+            var remainder = windowH - footerH - headerH - appHeaderH;
+
+            var msgDetail = wrapper.find('.messageDetail');
+            var msgDetailList = msgDetail.find('.messageDetailList');
+            msgDetail.height(remainder);
+            
+            if ($scope.responseSectionShouldShow()) { 
+                $scope.setMsgDetailListHeight();
+                msgDetailList.css("overflow-y", "auto"); // otherwise 2 scrollbars appear
+            }
+            else {
+                msgDetailList.height(remainder);
+                msgDetailList.css("overflow-y", "visible");
+            }
+            
+            var messageList = wrapper.find('.messageList');
+            messageList.height(remainder);
+
+            var threadTopLines = messageList.find(".threadTopLine");
+            threadTopLines.each(function(  ) {
+                var topLine = $(this);
+                var header = topLine.find(".threadTitle");
+                var date = topLine.find(".threadDate");       
+                var topLineW = topLine.width();
+                var dateW = date.width();
+                var newHeaderW = topLineW - dateW - 10; // 10 so it's not so tight
+                header.width(newHeaderW + "px");
+            });
+
+        }
+
+        $scope.submitButtonDisabled = function () {
+            var responseValueIsBad = true;
+            if ($scope.tempPageContent.responseValue) {
+                responseValueIsBad = $scope.tempPageContent.responseValue.length<$scope.pageData.replyConstraints.minLength || $scope.tempPageContent.responseValue.length > $scope.pageData.replyConstraints.maxLength;
+            }
+            return responseValueIsBad || $scope.uploadsInProgress();
+        }
+
+        // Change height on resize.
+        $(window).on('resize',$scope.setContentHeight);
+
+        $scope.$on("$destroy",function(){
+            $scope.undoFooterFix();
+            $(window).off('resize',$scope.setContentHeight);
+        });
+
+
+    }
+
+    itcApp.register.controller('resCenterController', ['$scope','$rootScope', '$state', '$stateParams', '$timeout', 'ITC', 'appSummaryService', 'bundleDataService', 'appVersionReferenceDataService', 'resCenterService', '$upload', '$sce', resCenterController]);
+    
+});

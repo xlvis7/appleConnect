@@ -1,0 +1,21 @@
+
+// /views/aarpServices -->
+define(['sbl!app'], function (itcApp) {
+  itcApp.factory('appArchiveService',function($http, loadManageAppsDataService){
+    var json_api_config = {
+      headers: {
+        'Accept': 'application/vnd.api+json',
+        'Content-Type': 'application/vnd.api+json'
+      }
+    };
+    var appArchiveService = {
+      patchApp: function(adamID, data) {
+        return $http.patch(json_api_path + '/v1/apps/' + adamID, data, json_api_config);
+      },
+      getRemovedApps: function() {
+        return $http.get(global_itc_path + '/ra/apps/removed', loadManageAppsDataService.requestConfig());
+      }
+    };
+    return appArchiveService;
+  });
+});

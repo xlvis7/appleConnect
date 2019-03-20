@@ -1,0 +1,44 @@
+// /views/aarpBannerJS
+'use strict';
+define(['sbl!app'], function (itcApp) {
+    
+        var aarpBannerController = function($scope, $rootScope, ITC) {
+            var resetPermissions = function() {
+                $scope.showArchivedBanner = false;
+                $scope.longArchivedTimestamp = null;
+                if ($rootScope.savedEditActivities) {
+                    // restore user permissions if we saved them, by default
+                    $scope.user.permittedActivities.EDIT = $rootScope.savedEditActivities;
+                    $rootScope.savedEditActivities = null;
+                }
+            };
+            $scope.$on('AppOverviewLoaded', function() {
+                if ($scope.appOverviewInfo !== undefined && $scope.appOverviewInfo !== null) {
+                    $scope.showArchivedBanner = ($scope.appOverviewInfo.archiveTimestamp !== undefined && $scope.appOverviewInfo.archiveTimestamp !== null) ? true : false;
+                    $scope.longArchivedTimestamp = ITC.time.showFullDate(moment($scope.appOverviewInfo.archiveTimestamp, "YYYY-MM-DD").valueOf());
+                    if (!$rootScope.savedEditActivities) {
+                        // save user permissions
+                        $rootScope.savedEditActivities = angular.copy($scope.user.permittedActivities.EDIT);
+                    }
+                    if ($scope.showArchivedBanner) {
+                        // clear user permissions if removed app
+                        $scope.user.permittedActivities.EDIT = [];
+                    } else {
+                        // restore saved user permissions otherwise
+                        $scope.user.permittedActivities.EDIT = $rootScope.savedEditActivities;
+                        $rootScope.savedEditActivities = null;
+                    }
+                } else {
+                    // reset
+                    resetPermissions();
+                }
+            });
+            var clearWatcher = $scope.$on("$destroy", function() {
+                resetPermissions();
+                clearWatcher();
+            });
+        }
+        itcApp.register.controller('aarpBannerController', ['$scope', '$rootScope', 'ITC', aarpBannerController ]);
+    
+    
+});

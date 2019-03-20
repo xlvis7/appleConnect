@@ -1,0 +1,219 @@
+define(['sbl!app'], function (itcApp) {
+
+    // Usage: <div itc-user-role-selector api-data="userApiData" total-user-count="totalUserCount" ng-model="grantedUsersTemp" current-user="user" l10n="l10n"></div>
+    itcApp.directive('itcUserRoleSelector', function($timeout, $filter) {
+        return {
+            scope: {
+                ngModel: "=",
+                ngShow: "=",
+                apiData: "=",
+                existingApiData: "=",
+                callbackFunction: "&",
+                totalUserCount: "=",
+                hasChanged: "=?",
+                currentUser: "=",
+                l10n: "=",
+                dropUp: "=",
+                hideInfoText: "=",
+                siloableUserCount: "=?"
+            },
+            replace: true,
+            transclude: true,
+            templateUrl: getGlobalPath('/itc/views/directives/user_role_selector_template.html'),
+            link: function(scope, elem, attr) {
+                scope.getDisplayName = function(user) {
+                    if (user.isRoleGroup) {
+                        return scope.l10n.interpolate('ITC.role.'+ user.id +'.label.withCount', { count: Number(user.count) });
+                    }
+                    if (user.firstName !== null && user.lastName !== null && user.firstName !== "" && user.lastName !== "") {
+                        return scope.l10n.interpolate('ITC.user.firstLastName', { firstName: user.firstName, lastName: user.lastName });
+                    } else {
+                        return user.username;
+                    }
+                };
+
+                scope.updateUserSelections = function() {
+                    if (!scope.initialized) return;
+                    // initially total selected is: total + current actor by default
+                    var finalCount = Number(scope.totalUserCount - scope.siloableUserCount - scope.additionalAdminFinance) + 1; // + 1 for current actor
+                    var roleItemsSelected = [];
+                    var newData = [];
+                    
+                    // populate w/ existing siloed users data if we haven't yet
+                    if (!scope.existingDataPushed && scope.existingApiData && scope.existingApiData.length > 0) {
+                        var usersToPush = [];
+                        angular.forEach(scope.existingApiData, function(user) {
+                            var idx = _.findIndex(scope.sortedUsers, {id:  user.id});
+                            if (idx > -1 && !_.findWhere(newData, {id: user.id})) { // is found and not already added
+                                newData.push(scope.sortedUsers[idx]);
+                                finalCount++;
+                            }
+                        });
+                        scope.existingDataPushed = true;
+                    }
+                    
+                    // run through existing data + add to new array
+                    angular.forEach(scope.ngModel.data, function(selection) {
+                        if (selection.isRoleGroup) { // is role
+                            var selectedRole = selection.id;
+                            roleItemsSelected.push(selectedRole);
+                            angular.forEach(scope.sortedUsers,function(user){ // find all users w/ role in roles list
+                                angular.forEach(user.roles, function(userRole) {
+                                    if (userRole === selectedRole && !_.findWhere(newData, {id:  user.id})) {
+                                        newData.push(user);
+                                        finalCount++;
+                                    }
+                                });
+                            });
+                        } else if (selection.group === 1 && !_.findWhere(newData, {id: selection.id})) { // is user
+                            newData.push(selection);
+                            finalCount++;
+                        }
+                    });
+                    // calculate which roles have been selected
+                    var rolesCount = {};
+                    angular.forEach(newData, function(user) {
+                        angular.forEach(user.roles, function(role) {
+                            if (rolesCount[role] !== undefined) {
+                                rolesCount[role] += 1;
+                            } else {
+                                rolesCount[role] = 1;
+                            }
+                        });
+                    });
+                    // remove roles that have no users left or already selected
+                    var roleItemsLeft = _.filter(scope.roleItemsToAdd, function(role){
+                        return (roleItemsSelected.indexOf(role.id) === -1 && (rolesCount[role.id] === undefined || rolesCount[role.id] !== scope.originalRolesCount[role.id]));
+                    });
+                    // update role counts:
+                    roleItemsLeft = _.map(roleItemsLeft, function(roleItem) {
+                        return Object.assign({}, roleItem, { count: scope.originalRolesCount[roleItem.id] - (rolesCount[roleItem.id] || 0) });
+                    });
+                    // add role groups
+                    scope.sortedUsersWithRoles = roleItemsLeft.concat(scope.sortedUsers);
+
+                    // add disabled selections last
+                    scope.sortedUsersWithRoles.unshift(scope.currentActor);
+                    if (scope.adminFinanceOption) {
+                        scope.sortedUsersWithRoles.unshift(scope.adminFinanceOption);
+                        newData.unshift(scope.sortedUsersWithRoles[1]);
+                    }
+                    newData.unshift(scope.sortedUsersWithRoles[0]);
+
+                    // update totals + final selection map
+                    scope.totalSelectedCount = finalCount;
+                    scope.ngModel.data = newData; // note chosen will trigger this function again, but only 1x as nothing is changed the 2nd time
+
+                    // don't save original until existing data has been added to selections
+                    if (scope.existingDataPushed) {
+                        if (scope.originalData === null) {
+                            var selections = _.chain(scope.ngModel.data).where({ group: 1 }).map(function(user) { return user.id; }).sortBy(function(id) { return id; }).value();
+                            scope.originalData = angular.toJson(selections);
+                        } else {
+                            var newSelections = _.chain(scope.ngModel.data).where({ group: 1 }).map(function(user) { return user.id; }).sortBy(function(id) { return id; }).value();
+                            scope.hasChanged = (angular.toJson(newSelections) !== scope.originalData);
+                            if (!scope.$$phase && !scope.$root.$$phase) scope.$apply();
+                        }
+                    }
+
+                    if (scope.callbackFunction !== undefined) {
+                        $timeout(function() {
+                            scope.$apply(scope.callbackFunction())
+                        });
+                    }
+                };
+
+                var removeShowWatcher = scope.$watch('ngShow', function(val) {
+                    if (val === true) {
+                        scope.initialized = true;
+                        if (scope.existingDataPushed && scope.originalData !== null) {
+                            var newSelections = _.chain(scope.ngModel.data).where({ group: 1 }).map(function(user) { return user.id; }).sortBy(function(id) { return id; }).value();
+                            scope.hasChanged = (angular.toJson(newSelections) !== scope.originalData);
+                            if (!scope.$$phase && !scope.$root.$$phase) scope.$apply();
+                        }
+                    } else if (val === false) {
+                        scope.initialized = false;
+                    }
+                });
+
+                var removeWatcher = scope.$watch('apiData', function(val) {
+                    if (val === undefined || val === null) return;
+                    scope.availableUsers = val;
+
+                    // remove unsiloable users:
+                    scope.additionalAdminFinance = 1; // if current user is not silo-able, we should remove from admin total
+                    scope.availableUsers = _.filter(scope.availableUsers, function(user) {
+                        if (!user.attributes.username && !user.attributes.email) { return false }; // filter out null usernames / emails
+                        // filter non-siloable users
+                        if (!!~_.findIndex(['ADMIN', 'LEGAL', 'ACCOUNT_HOLDER', 'FINANCE', 'ACCESS_TO_REPORTS', 'TECHNICAL'], function(role) { return user.attributes.roles.indexOf(role) > -1; })) {
+                            return false;
+                        }
+                        // filter out current user
+                        if (scope.currentUser.publicUserId && user.id === scope.currentUser.publicUserId) {
+                            scope.additionalAdminFinance = 0;
+                            return false;
+                        }
+                        return true;
+                    });
+                    scope.availableUsers = _.map(scope.availableUsers, function(user) {
+                        // Map to old roles, until user merge
+                        var newRoles = _.map(user.attributes.roles, function(role) { return role.toLowerCase().replace('_', ''); });
+                        var userVal = {
+                            firstName: user.attributes.firstName || '',
+                            lastName: user.attributes.lastName || '',
+                            username: user.attributes.username || user.attributes.email || '',
+                            roles: newRoles,
+                            id: user.id
+                        };
+                        return userVal;
+                    });
+                    scope.siloableUserCount = scope.availableUsers.length + (1 - scope.additionalAdminFinance); // but + 1 for siloable current user if found earlier
+
+                    // sort users by display name
+                    scope.sortedUsers = $filter('orderBy')(scope.availableUsers, scope.getDisplayName);
+
+                    // Set up initial roles + groups
+                    var rolesCount = {};
+                    angular.forEach(scope.sortedUsers, function(user) {
+                        user.group = 1;
+                        angular.forEach(user.roles, function(role) {
+                            if (rolesCount[role] !== undefined) {
+                                rolesCount[role] += 1;
+                            } else {
+                                rolesCount[role] = 1;
+                            }
+                        });
+                    });
+                    scope.roleItemsToAdd = [];
+                    angular.forEach(Object.keys(rolesCount), function(role) {
+                        var item = { id: role, isRoleGroup: true, firstName: "", lastName: "", displayName: "", username: "", count: rolesCount[role], group: 0 };
+                        scope.roleItemsToAdd.push(item);
+                    });
+                    scope.originalRolesCount = rolesCount;
+                    scope.roleItemsToAdd.sort(function(a,b){ return a.displayName.toLowerCase().localeCompare(b.displayName.toLowerCase()); });
+
+                    // empty data set:
+                    scope.ngModel.data = [];
+                    scope.originalData = null;
+                    scope.existingDataPushed = false;
+
+                    // prepend defaults:
+                    var totalNonSiloable = Number(scope.totalUserCount - scope.siloableUserCount - scope.additionalAdminFinance);
+                    var adminFinanceStr = scope.l10n.interpolate('ITC.apps.UserSelector.Admin.label', { total: totalNonSiloable });
+                    scope.adminFinanceOption = (totalNonSiloable > 0) ? { id: "admin", firstName: "", lastName: "", roles: [], username: adminFinanceStr, displayName: adminFinanceStr, disabled: true, group: 0 } : null;
+                    scope.currentActor = { id: "current", firstName: scope.currentUser.firstname, lastName: scope.currentUser.lastname, roles: [], username: scope.currentUser.userName, disabled: true, group: 0 };
+
+                    // init menu selections
+                    scope.initialized = true;
+                    scope.updateUserSelections();
+                });
+
+                scope.$on("$destroy",function(){
+                    removeWatcher();
+                    removeShowWatcher();
+                });
+            }
+        };
+    });
+
+});

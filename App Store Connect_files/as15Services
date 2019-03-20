@@ -1,0 +1,38 @@
+
+// /views/as15Services -->
+define(['sbl!app'], function (itcApp) {
+  itcApp.factory('appSiloingService',function($http){
+    var json_api_config = {
+      headers: {
+        'Accept': 'application/vnd.api+json',
+        'Content-Type': 'application/vnd.api+json'
+      }
+    };
+    var appSiloingService = {
+      getSiloableUsers: function(adamId) {
+        var visibleApps = '';
+        if (adamId) { visibleApps = '&filter[visibleApps]=' + adamId; }
+        return $http.get(json_api_path + '/v1/users?filter[roles]=APP_MANAGER,DEVELOPER,MARKETING,SALES,CUSTOMER_SUPPORT&fields[users]=firstName,lastName,roles,username&limit=2000' + visibleApps, json_api_config);
+      },
+      getSiloablePendingUsers: function(adamId) {
+        var visibleApps = '';
+        if (adamId) { visibleApps = '&filter[visibleApps]=' + adamId; }
+        return $http.get(json_api_path + '/v1/userInvitations?filter[roles]=APP_MANAGER,DEVELOPER,MARKETING,SALES,CUSTOMER_SUPPORT&fields[userInvitations]=firstName,lastName,roles,email&limit=2000' + visibleApps, json_api_config);
+      },
+      getTotalUsers: function() {
+        return $http.get(json_api_path + '/v1/users?limit=0', json_api_config)
+          .then(function(response) { return (response.data.meta && response.data.meta.paging) ? response.data.meta.paging.total : 0; })
+          .catch(function(error) { return 0; });
+      },
+      getTotalInvitations: function() {
+        return $http.get(json_api_path + '/v1/userInvitations?limit=0', json_api_config)
+          .then(function(response) { return (response.data.meta && response.data.meta.paging) ? response.data.meta.paging.total : 0; })
+          .catch(function(error) { return 0; });
+      },
+      setUserAppPermissions: function(data) {
+        return $http.post(json_api_path + '/v1/userAppPermissions', data, json_api_config);
+      }
+    };
+    return appSiloingService;
+  });
+});

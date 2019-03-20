@@ -1,0 +1,17 @@
+define(['sbl!app'], function (itcApp) {
+    itcApp.factory('phasedReleaseService', function($http) {
+        return {
+            releaseToAllUsers: function(adamId, versionId, state) {
+                var promise = $http.post(global_itc_path + '/ra/apps/' + adamId + '/versions/' + versionId + '/phasedRelease/state/' + state).then(function(response) {
+                    log("POST " + adamId + '/versions/' + versionId + 'phasedRelease/state/COMPLETE');
+                    log(response.data);
+                    return response.data;
+                }, function(reason) {
+                    return reason;
+                });
+
+                return promise;
+            }
+        };
+    });
+});

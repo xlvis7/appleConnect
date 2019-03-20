@@ -1,0 +1,166 @@
+define(['sbl!app'], function (itcApp) {
+
+    itcApp.factory('itcHeaderService', function (ITC) {
+        var IOS_FALLBACK_ICON = 'cicon-appicon-placeholder-heavy';
+        var TVIOS_FALLBACK_ICON = 'tvos-noicon';
+        var APPS_URL = '/WebObjects/iTunesConnect.woa/ra/ng/app/';
+        var TVOS_ICON_TYPE = 'tvOS';
+        var IOS_ICON_TYPE = 'iOS';
+        var IOS_ICON_MASK = 'ios7-style-icon';
+        var TVOS_ICON_MASK = 'tvos-style-icon';
+
+        return {
+            isURBrand: function(res){
+              if (res && res.modules && Array.isArray(res.modules)) {
+                return res.modules.find(function(mod){
+                  return (mod && mod.key === 'ManageUsers');
+                });
+              }
+            },
+            formatMobileNav: function(res){
+                if (res && res.modules && Array.isArray(res.modules)) {
+                  return res.modules.map(function(mod, index) {
+                    return Object.assign({
+                      id: index,
+                      title: mod.localizedName,
+                      linkUrl: mod.url,
+                    }, mod);
+                });
+              }
+            },
+            formatUser: function(res) {
+              var loc = null;
+              if (res && res.user && res.provider && res.availableProviders && Array.isArray(res.availableProviders)) {
+                var formattedProvider = {
+                  id: res.provider.providerId,
+                  title: res.provider.name,
+                  contentTypes: res.provider.contentTypes,
+                }
+
+                var user = {
+                  id: res.user.prsId,
+                  fullName: res.user.fullName,
+                  emailAddress: res.user.emailAddress,
+                }
+
+                var details = {};
+
+                if (Array.isArray(res.userProfile)){
+                  details = res.userProfile.reduce(function (acc, val) {
+                    acc[val.key] = val;
+                    return acc;
+                  }, {});
+                }
+
+                if (details.signIn && details.signOut && details.personalDetails) {
+                  loc = {
+                    signInUrl: details.signIn.url,
+                    signIn:  details.signIn.localizedText || '',
+                    signOut: details.signOut.localizedText || '',
+                    signOutUrl: details.signOut.url,
+                    personalDetails: details.personalDetails.localizedText,
+                    personalDetailsLinkUrl: details.personalDetails.url
+                  };
+                }
+
+                var availableProviders = res.availableProviders.map(function (p) {
+                  return { id: p.providerId, title: p.name, contentTypes: p.contentTypes };
+              })
+
+                if (availableProviders && availableProviders.length > 1) {
+                  // sort alphabetically
+                  availableProviders.sort(function (a, b) {
+                    return a.title.localeCompare(b.title);
+                  });
+
+                  // then add selected provider to top of list
+                  var currentIndex = -1;
+                  availableProviders.forEach(function(p, i) {
+                    if (p.id === formattedProvider.id) {
+                    currentIndex = i;
+                  }
+                })
+                  if (currentIndex > -1) {
+                    availableProviders.splice(0, 0, availableProviders.splice(currentIndex, 1)[0]);
+                  }
+                }
+                return {
+                  user: user,
+                  provider: formattedProvider,
+                  availableProviders: availableProviders,
+                  loc: loc
+                };
+              }
+            },
+            formatProviders: function (userData) {
+                var accounts, contentProvider;
+                if (userData && userData.associatedAccounts && angular.isArray(userData.associatedAccounts)) {
+                    accounts = angular.copy(userData.associatedAccounts);
+                    return accounts.map(function(account) {
+                        contentProvider = account.contentProvider;
+                        return {
+                            id: contentProvider.contentProviderId,
+                            title: contentProvider.name,
+                        };
+                    });
+                } else {
+                    throw new Error ('Expected providers to be an array');
+                }
+            },
+            formatAppIcon: function (app) {
+                if (app.imageUrl) {
+                    app.iconUrl = app.imageUrl;
+                    app.icon =  app.iconType === IOS_ICON_TYPE ? IOS_ICON_MASK : TVOS_ICON_MASK;
+                } else {
+                    app.icon =  app.iconType === TVOS_ICON_TYPE ? TVIOS_FALLBACK_ICON : IOS_FALLBACK_ICON;
+                }
+            },
+            formatApps: function (apps, user, sums) {
+                var appsClone = angular.copy(apps);
+                var self = this;
+                return appsClone.map(function (app) {
+                    app.title = app.name;
+                    if (sums && sums[app.id] && sums[app.id].bundleId){
+                      app.bundleId = sums[app.id].bundleId;
+                    }
+                    if (ITC.roles.hasUserRole(user, 'Customer Support', true)) {
+                        if (app.platforms.length === 1 && app.platforms[0].toLowerCase() === 'appletvos') app.linkUrl = APPS_URL + app.id + '/' + app.platforms[0].toLowerCase() + '/ratings';
+                        else app.linkUrl = APPS_URL + app.id + '/' + app.platforms[0].toLowerCase() + '/ratingsResponses';
+                    }
+                    else app.linkUrl = APPS_URL + app.id;
+                    self.formatAppIcon(app);
+                    return app;
+                });
+            },
+            formatSelectedApp: function (app) {
+                var selectedApp = angular.copy(app);
+                selectedApp.title = selectedApp.name;
+                this.formatAppIcon(selectedApp);
+                return selectedApp;
+            },
+
+
+            formatMainNav: function (nav) {
+                var navClone = angular.copy(nav);
+                return navClone.map(function(navItem, index) {
+                    navItem.id = index;
+                    navItem.title = navItem.name;
+                    navItem.linkUrl = navItem.url;
+                    return navItem;
+                });
+            },
+            formatHelp: function (help) {
+                var helpItems = angular.copy(help);
+                if (angular.isArray(helpItems)) {
+                    return helpItems.map(function(item, index) {
+                        item.title = item.localizedText;
+                        item.linkUrl = item.url;
+                        item.id = index;
+                        return item;
+                    });
+                }
+
+            }
+        };
+    });
+});
